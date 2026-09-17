@@ -1,21 +1,15 @@
 // =====================================================================
 // CONFIGURAÇÃO DO FIREBASE — formulário público de NPS (Vinuta)
-// =====================================================================
-// Este formulário usa o MESMO projeto Firebase do painel principal
-// (index.html na raiz do projeto). Copie aqui EXATAMENTE os mesmos
-// valores que você preencheu no objeto FIREBASE_CONFIG do painel.
-//
-// Este arquivo não carrega firebase-auth-compat.js de propósito: quem
-// responde a avaliação não faz login, só precisa do Firestore.
+// Mesmo projeto Firebase do painel principal
 // =====================================================================
 
 const firebaseConfig = {
-  apiKey: "COLE_AQUI",
-  authDomain: "COLE_AQUI",
-  projectId: "COLE_AQUI",
-  storageBucket: "COLE_AQUI",
-  messagingSenderId: "COLE_AQUI",
-  appId: "COLE_AQUI"
+  apiKey: "AIzaSyA46O-u6ormVql_kq4V_AE4Sv__zmu6PpU",
+  authDomain: "painel-de-marketing-64559.firebaseapp.com",
+  projectId: "painel-de-marketing-64559",
+  storageBucket: "painel-de-marketing-64559.firebasestorage.app",
+  messagingSenderId: "881119877039",
+  appId: "1:881119877039:web:8b446b9b003c233ad5c15a"
 };
 
 firebase.initializeApp(firebaseConfig);
