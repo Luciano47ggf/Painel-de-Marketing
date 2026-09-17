@@ -1,0 +1,89 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* ---------- helpers ---------- */
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function myProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function isActive() {
+      return isSignedIn() && myProfile().data.status == 'ativo';
+    }
+    function isGestor() {
+      return isActive() && myProfile().data.role == 'gestor';
+    }
+    function changedOnly(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+    }
+
+    /* ---------- usuarios ----------
+       As contas de login (e-mail/senha) sao criadas manualmente no Firebase
+       Auth pelo administrador. O documento do perfil (users/{uid}) e criado
+       automaticamente pelo app no primeiro acesso, sempre como executor(a)
+       ativo(a) -- nunca com papel de gestor. Para promover a primeira pessoa
+       a gestor(a), edite o campo "role" desse documento no Firestore Console. */
+    match /users/{userId} {
+      allow read: if isActive();
+      allow create: if isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role == 'executor'
+        && request.resource.data.status == 'ativo';
+      allow update: if isGestor()
+        || (isSignedIn() && request.auth.uid == userId && changedOnly(['lastLogin']));
+      allow delete: if false;
+    }
+
+    /* ---------- demandas ----------
+       Gestor: cria, edita, aprova, exclui e reatribui livremente.
+       Executor: pode assumir uma demanda em "demandas" (vira responsavel),
+       enviar sua propria demanda de "producao" para "aprovacao", e sempre
+       pode comentar / anexar arquivos. */
+    match /jobs/{jobId} {
+      allow read: if isActive();
+      allow create: if isGestor();
+      allow delete: if isGestor();
+      allow update: if isGestor()
+        || (isActive() && (
+             (resource.data.status == 'demandas'
+                && request.resource.data.status == 'producao'
+                && request.resource.data.assignedTo == request.auth.uid
+                && changedOnly(['status','assignedTo','updatedAt']))
+          || (resource.data.status == 'producao'
+                && request.resource.data.status == 'aprovacao'
+                && resource.data.assignedTo == request.auth.uid
+                && changedOnly(['status','updatedAt']))
+          || changedOnly(['comments','updatedAt'])
+          || changedOnly(['attachments','updatedAt'])
+           ));
+    }
+
+    /* ---------- clientes ----------
+       Gestor: cadastra, edita dados e exclui.
+       Executor: pode registrar contatos/acompanhamentos (so mexe no
+       historico, ultimo contato e proximo acompanhamento). */
+    match /clients/{clientId} {
+      allow read: if isActive();
+      allow create: if isGestor();
+      allow delete: if isGestor();
+      allow update: if isGestor()
+        || (isActive() && changedOnly(['timeline','lastContact','nextFollowUp','updatedAt']));
+    }
+
+    /* ---------- log de atividades ----------
+       Qualquer pessoa ativa pode gravar (a propria acao gera o registro).
+       So o gestor consulta o historico completo. Imutavel. */
+    match /logs/{logId} {
+      allow read: if isGestor();
+      allow create: if isActive() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    /* ---------- contador de codigo das demandas (JOB-0001, JOB-0002...) --- */
+    match /meta/counters {
+      allow read, write: if isGestor();
+    }
+  }
+}
