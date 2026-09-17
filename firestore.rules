@@ -85,5 +85,45 @@ service cloud.firestore {
     match /meta/counters {
       allow read, write: if isGestor();
     }
+
+    /* ---------- NPS de eventos ----------
+       Gestor: cria, edita e encerra eventos; le as respostas e resultados.
+       Publico (sem login): consegue abrir UM evento pelo id (para o
+       formulario /nps/?event=ID funcionar e mostrar "encerrado" quando for
+       o caso), mas nao pode listar todos os eventos. Enquanto o evento
+       estiver ativo e antes do horario limite, qualquer visitante pode
+       enviar UMA avaliacao (so os campos score/createdAt, com createdAt
+       obrigatoriamente igual ao horario do servidor) e incrementar em 1 o
+       contador "responseCount" do evento -- nada mais. Nenhuma outra
+       leitura ou escrita publica e permitida. */
+    match /npsEvents/{eventId} {
+      allow get: if true;
+      allow list: if isGestor();
+      allow create: if isGestor()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.status == 'ativo';
+      allow delete: if isGestor();
+      allow update: if isGestor()
+        || (
+             changedOnly(['responseCount']) &&
+             resource.data.status == 'ativo' &&
+             resource.data.closesAt is timestamp &&
+             request.time < resource.data.closesAt &&
+             request.resource.data.responseCount == resource.data.responseCount + 1
+           );
+
+      match /responses/{responseId} {
+        allow create: if
+          get(/databases/$(database)/documents/npsEvents/$(eventId)).data.status == 'ativo' &&
+          get(/databases/$(database)/documents/npsEvents/$(eventId)).data.closesAt is timestamp &&
+          request.time < get(/databases/$(database)/documents/npsEvents/$(eventId)).data.closesAt &&
+          request.resource.data.keys().hasOnly(['score','createdAt']) &&
+          request.resource.data.score is int &&
+          request.resource.data.score >= 1 && request.resource.data.score <= 10 &&
+          request.resource.data.createdAt == request.time;
+        allow read: if isGestor();
+        allow update, delete: if false;
+      }
+    }
   }
 }

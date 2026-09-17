@@ -279,6 +279,23 @@ tr.row-click:hover{background:var(--surface-2);}
 .home-row-sub{color:var(--text-muted);font-size:12px;margin-left:auto;white-space:nowrap;}
 .home-empty{color:var(--text-muted);font-size:13px;padding:10px 0;}
 
+/* ---------- NPS ---------- */
+.nps-event-card{background:var(--surface);border:1px solid var(--border-soft);border-radius:14px;padding:18px 20px;margin-bottom:14px;}
+.nps-event-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;}
+.nps-event-name{font-family:'Cormorant Garamond',serif;font-size:19px;font-weight:700;color:var(--accent-ink);}
+.nps-event-meta{color:var(--text-muted);font-size:12.5px;margin-top:3px;}
+.nps-event-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;}
+.nps-legend{display:flex;gap:16px;font-size:12px;color:var(--text-muted);margin:2px 0 10px;flex-wrap:wrap;}
+.nps-legend span{display:flex;align-items:center;gap:6px;}
+.nps-dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
+.nps-bar{display:flex;width:100%;height:14px;border-radius:7px;overflow:hidden;background:var(--surface-2);margin-bottom:22px;}
+.nps-seg{height:100%;transition:width .5s ease;}
+.nps-histogram{display:flex;align-items:flex-end;justify-content:space-between;gap:6px;height:110px;margin-bottom:22px;}
+.nps-hist-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;}
+.nps-hist-count{font-size:10px;color:var(--text-muted);margin-bottom:4px;min-height:12px;}
+.nps-hist-bar{width:100%;max-width:24px;border-radius:3px 3px 0 0;transition:height .5s ease;background:var(--accent);}
+.nps-hist-score{font-size:10.5px;color:var(--text-muted);margin-top:6px;font-family:'Cormorant Garamond',serif;font-weight:600;}
+
 /* ---------- login gate ---------- */
 #onboard{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:200;}
 .login-card{background:var(--surface);border:1px solid var(--border-soft);border-radius:18px;padding:40px 38px;max-width:420px;width:92%;box-shadow:var(--shadow);}
@@ -366,6 +383,7 @@ const S = {
   jobs: [],
   clients: [],
   users: [],
+  npsEvents: [],
   filters: { q:'', onlyMine:false, showArchived:false, brand:'todas' },
   clientFilters: { q:'', level:'todos' },
   adminFilters: { q:'', entity:'todas', user:'todos', from:'', to:'' },
@@ -528,6 +546,7 @@ function clientsCol(){ return S.db.collection('clients'); }
 function usersCol(){ return S.db.collection('users'); }
 function logsCol(){ return S.db.collection('logs'); }
 function countersDoc(){ return S.db.collection('meta').doc('counters'); }
+function npsEventsCol(){ return S.db.collection('npsEvents'); }
 
 /* ===================== log de atividades ===================== */
 async function logActivity(action, entity, entityId, description){
@@ -586,7 +605,7 @@ function unsubscribeAll(){
   S.unsubs = [];
 }
 function resetAppState(){
-  S.jobs = []; S.clients = []; S.users = []; S.logEntries = [];
+  S.jobs = []; S.clients = []; S.users = []; S.logEntries = []; S.npsEvents = [];
   S.role = null; S.status = null;
   S.me = {id:null, name:'', email:null};
   S.page = 'home';
@@ -613,7 +632,11 @@ function subscribe(){
       S.logEntries = qs.docs.map(d=>Object.assign({id:d.id}, d.data()));
       render();
     }, e=>console.warn('logs sub', e));
-    S.unsubs.push(u4);
+    const u5 = npsEventsCol().onSnapshot(qs=>{
+      S.npsEvents = qs.docs.map(d=>Object.assign({id:d.id}, d.data()));
+      render();
+    }, e=>console.warn('nps events sub', e));
+    S.unsubs.push(u4, u5);
   }
 }
 
@@ -777,6 +800,7 @@ const NAV_ITEMS = [
   {key:'home',    label:'Início',         icon:'⌂'},
   {key:'board',   label:'Quadro',         icon:'▦'},
   {key:'clients', label:'Clientes',       icon:'◐'},
+  {key:'nps',     label:'NPS',            icon:'✦', gestorOnly:true},
   {key:'admin',   label:'Administração',  icon:'≣', gestorOnly:true},
 ];
 
@@ -801,12 +825,13 @@ function renderSidebar(){
 
 function render(){
   if(!S.role) return; // tela de login cuida disso
-  if(S.page==='admin' && S.role!=='gestor') S.page = 'home';
+  if((S.page==='admin' || S.page==='nps') && S.role!=='gestor') S.page = 'home';
   renderSidebar();
   const main = document.getElementById('main');
   if(S.page==='home') main.innerHTML = homeHTML();
   else if(S.page==='board') main.innerHTML = boardHTML();
   else if(S.page==='clients') main.innerHTML = clientsHTML();
+  else if(S.page==='nps') main.innerHTML = npsHTML();
   else main.innerHTML = adminHTML();
   bindPageEvents();
 }
@@ -1126,28 +1151,337 @@ function adminHTML(){
   `;
 }
 
+/* ===================== NPS de eventos ===================== */
+function npsPublicLink(eventId){ return window.location.origin + '/nps/?event=' + eventId; }
+function npsClosesAtDate(ev){ return (ev.closesAt && typeof ev.closesAt.toDate==='function') ? ev.closesAt.toDate() : null; }
+function npsIsOpen(ev){
+  const closes = npsClosesAtDate(ev);
+  return ev.status==='ativo' && (!closes || new Date() < closes);
+}
+function fmtNpsClosesLabel(date){
+  if(!date) return '';
+  return date.toLocaleDateString('pt-BR')+' às '+date.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+}
+
+function npsHTML(){
+  if(S.role!=='gestor'){
+    return `<div class="empty-state">Área restrita ao gestor.</div>`;
+  }
+  const events = S.npsEvents.slice().sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+  const activeEvents = events.filter(npsIsOpen);
+  const closedEvents = events.filter(ev=>!npsIsOpen(ev));
+
+  return `
+    <h1 class="page-title">NPS</h1>
+    <p class="page-sub">Avaliações de satisfação por evento, usando o formulário Vinuta já existente.</p>
+    <div class="toolbar">
+      <span style="flex:1"></span>
+      <button class="btn primary" id="newNpsEventBtn">+ Criar NPS de evento</button>
+    </div>
+
+    <div class="section-label" style="margin-top:0;">Eventos ativos</div>
+    ${activeEvents.length ? activeEvents.map(npsEventCardHTML).join('') : '<div class="table-empty">Nenhum evento ativo no momento.</div>'}
+
+    <div class="section-label">Eventos encerrados</div>
+    ${closedEvents.length ? closedEvents.map(npsEventCardHTML).join('') : '<div class="table-empty">Nenhum evento encerrado ainda.</div>'}
+  `;
+}
+
+function npsEventCardHTML(ev){
+  const open = npsIsOpen(ev);
+  const closesDate = npsClosesAtDate(ev);
+  return `
+    <div class="nps-event-card">
+      <div class="nps-event-top">
+        <div>
+          <div class="nps-event-name">${esc(ev.name)}</div>
+          <div class="nps-event-meta">Evento em ${ev.eventDate?fmtDate(ev.eventDate):'—'}</div>
+          <div class="nps-event-meta">${open ? 'Recebendo avaliações · link disponível até '+fmtNpsClosesLabel(closesDate) : 'Avaliação encerrada'}</div>
+        </div>
+        <div style="text-align:right;">
+          <span class="status-badge ${open?'ativo':'inativo'}">${open?'Ativo':'Encerrado'}</span>
+          <div class="stat-num" style="font-size:22px;margin-top:8px;">${ev.responseCount||0}</div>
+          <div class="hint">avaliações</div>
+        </div>
+      </div>
+      <div class="nps-event-actions">
+        <button class="btn small" data-nps-copy="${ev.id}">Copiar link</button>
+        <button class="btn small" data-nps-qr="${ev.id}">Ver QR Code</button>
+        <button class="btn small" data-nps-results="${ev.id}">Ver resultados</button>
+        ${open ? `<button class="btn small danger" data-nps-close="${ev.id}">Encerrar agora</button>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function npsEventFormHTML(){
+  return `
+  <div class="overlay" id="ov">
+    <div class="modal">
+      <div class="modal-head">
+        <h3 class="modal-title">Criar NPS de evento</h3>
+        <button class="modal-close" id="closeModal">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="field"><label>Nome do evento</label><input type="text" id="npse_name" placeholder="Ex.: Degustação Expo 2026"></div>
+        <div class="field"><label>Data do evento</label><input type="date" id="npse_date"></div>
+        <div class="field"><label>Data/hora limite para receber avaliações</label><input type="datetime-local" id="npse_closes"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" id="closeModal2">Cancelar</button>
+        <button class="btn primary" id="saveNpsEvent">Criar evento</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function npsQrModalHTML(ev){
+  const link = npsPublicLink(ev.id);
+  const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=260x260&color=110-20-36&data=' + encodeURIComponent(link);
+  return `
+  <div class="overlay" id="ov">
+    <div class="modal">
+      <div class="modal-head">
+        <h3 class="modal-title">QR Code — ${esc(ev.name)}</h3>
+        <button class="modal-close" id="closeModal">×</button>
+      </div>
+      <div class="modal-body" style="text-align:center;">
+        <img src="${qrUrl}" alt="QR code do evento" style="width:220px;height:220px;border-radius:10px;border:1px solid var(--border-soft);">
+        <div class="hint" style="margin-top:14px;word-break:break-all;">${esc(link)}</div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" id="closeModal2">Fechar</button>
+        <button class="btn primary" data-nps-copy="${ev.id}">Copiar link</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function npsResultsModalHTML(ev){
+  return `
+  <div class="overlay" id="ov">
+    <div class="modal wide">
+      <div class="modal-head">
+        <div>
+          <div class="hint" style="margin-bottom:2px;">${esc(ev.name)}</div>
+          <h3 class="modal-title">Resultados</h3>
+        </div>
+        <button class="modal-close" id="closeModal">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="stat-grid" style="margin-bottom:20px;">
+          <div class="stat-tile" style="cursor:default;"><div class="stat-num" id="nps_statTotal">0</div><div class="stat-label">Respostas</div></div>
+          <div class="stat-tile" style="cursor:default;"><div class="stat-num" id="nps_statScore">0</div><div class="stat-label">NPS</div></div>
+          <div class="stat-tile" style="cursor:default;"><div class="stat-num" id="nps_statAvg">0.0</div><div class="stat-label">Nota média</div></div>
+          <div class="stat-tile" style="cursor:default;"><div class="stat-num" id="nps_statToday">0</div><div class="stat-label">Hoje</div></div>
+        </div>
+
+        <div class="section-label" style="margin-top:0;">Classificação NPS</div>
+        <div class="nps-legend">
+          <span><i class="nps-dot" style="background:var(--danger)"></i>Detratores (1–6)</span>
+          <span><i class="nps-dot" style="background:var(--gold)"></i>Neutros (7–8)</span>
+          <span><i class="nps-dot" style="background:var(--accent)"></i>Promotores (9–10)</span>
+        </div>
+        <div class="nps-bar">
+          <div class="nps-seg" id="nps_segDetrator" style="width:0%;background:var(--danger);"></div>
+          <div class="nps-seg" id="nps_segPassivo" style="width:0%;background:var(--gold);"></div>
+          <div class="nps-seg" id="nps_segPromotor" style="width:0%;background:var(--accent);"></div>
+        </div>
+
+        <div class="section-label">Votos por nota</div>
+        <div class="nps-histogram" id="nps_histogram"></div>
+
+        <div class="section-label">Resumo do desempenho</div>
+        <p id="nps_summaryText" class="hint" style="font-size:13px;line-height:1.6;">Aguardando avaliações...</p>
+        <div class="stat-grid" id="nps_summaryGrid" style="margin-top:10px;"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" id="closeModal2">Fechar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+let npsResultsUnsub = null;
+function startNpsResultsListener(eventId){
+  stopNpsResultsListener();
+  npsResultsUnsub = npsEventsCol().doc(eventId).collection('responses').onSnapshot(qs=>{
+    renderNpsResults(qs.docs.map(d=>d.data()));
+  }, e=>console.warn('nps results sub', e));
+}
+function stopNpsResultsListener(){
+  if(npsResultsUnsub){ npsResultsUnsub(); npsResultsUnsub = null; }
+}
+function npsCategoryOf(score){
+  if(score>=9) return 'promotor';
+  if(score>=7) return 'passivo';
+  return 'detrator';
+}
+function npsScoreColor(score){
+  if(score>=9) return 'var(--accent)';
+  if(score>=7) return 'var(--gold)';
+  return 'var(--danger)';
+}
+function renderNpsResults(docs){
+  const elTotal = document.getElementById('nps_statTotal');
+  if(!elTotal) return; // modal foi fechado enquanto os dados chegavam
+
+  const total = docs.length;
+  const todayStr = new Date().toDateString();
+  const today = docs.filter(d=>d.createdAt && typeof d.createdAt.toDate==='function' && d.createdAt.toDate().toDateString()===todayStr).length;
+
+  let soma = 0, detratores=0, passivos=0, promotores=0;
+  const counts = [0,0,0,0,0,0,0,0,0,0,0];
+  docs.forEach(d=>{
+    const score = (typeof d.score==='number') ? d.score : null;
+    if(score===null || score<1 || score>10) return;
+    counts[score]++;
+    soma += score;
+    const cat = npsCategoryOf(score);
+    if(cat==='detrator') detratores++;
+    else if(cat==='passivo') passivos++;
+    else promotores++;
+  });
+
+  const media = total ? soma/total : 0;
+  const nps = total ? Math.round(((promotores-detratores)/total)*100) : 0;
+
+  elTotal.textContent = total;
+  document.getElementById('nps_statScore').textContent = nps;
+  document.getElementById('nps_statAvg').textContent = media.toFixed(1);
+  document.getElementById('nps_statToday').textContent = today;
+
+  const pct = n => total ? (n/total*100) : 0;
+  document.getElementById('nps_segDetrator').style.width = pct(detratores)+'%';
+  document.getElementById('nps_segPassivo').style.width = pct(passivos)+'%';
+  document.getElementById('nps_segPromotor').style.width = pct(promotores)+'%';
+
+  const scores = [1,2,3,4,5,6,7,8,9,10];
+  const maxCount = Math.max(...scores.map(s=>counts[s]), 1);
+  document.getElementById('nps_histogram').innerHTML = scores.map(score=>{
+    const c = counts[score];
+    const heightPct = c ? Math.max((c/maxCount)*100, 6) : 2;
+    return `<div class="nps-hist-col">
+      <span class="nps-hist-count">${c||''}</span>
+      <div class="nps-hist-bar" style="height:${heightPct}%;background:${npsScoreColor(score)};opacity:${c?1:.25}"></div>
+      <span class="nps-hist-score">${score}</span>
+    </div>`;
+  }).join('');
+
+  const summaryText = document.getElementById('nps_summaryText');
+  const summaryGrid = document.getElementById('nps_summaryGrid');
+  if(!total){
+    summaryText.textContent = 'Assim que as primeiras avaliações chegarem, o resumo de desempenho aparece aqui.';
+    summaryGrid.innerHTML = '';
+    return;
+  }
+  let notaMaisComum = 1;
+  scores.forEach(s=>{ if(counts[s]>counts[notaMaisComum]) notaMaisComum = s; });
+  const pctInt = n => Math.round((n/total)*100);
+
+  let nivel, comentario;
+  if(nps>=75){ nivel='excelente'; comentario='a experiência está gerando forte recomendação espontânea entre os convidados.'; }
+  else if(nps>=50){ nivel='muito bom'; comentario='a maioria dos convidados recomendaria a Vinuta, com espaço para conquistar os neutros.'; }
+  else if(nps>=0){ nivel='razoável'; comentario='há uma base de promotores, mas ainda existe uma parcela relevante de detratores a entender melhor.'; }
+  else { nivel='de atenção'; comentario='o número de detratores supera o de promotores — vale investigar os pontos de insatisfação.'; }
+
+  summaryText.innerHTML = `Com base em <b>${total}</b> resposta${total===1?'':'s'}, o evento atingiu um NPS de <b>${nps}</b>, considerado <b>${nivel}</b>. A nota média foi <b>${media.toFixed(1)}</b> e a nota mais recorrente foi <b>${notaMaisComum}</b>. Em resumo, ${comentario}`;
+  summaryGrid.innerHTML = `
+    <div class="stat-tile" style="cursor:default;"><div class="stat-num">${media.toFixed(1)}</div><div class="stat-label">Nota média</div></div>
+    <div class="stat-tile" style="cursor:default;"><div class="stat-num">${pctInt(promotores)}%</div><div class="stat-label">Promotores</div></div>
+    <div class="stat-tile" style="cursor:default;"><div class="stat-num">${pctInt(passivos)}%</div><div class="stat-label">Neutros</div></div>
+    <div class="stat-tile" style="cursor:default;"><div class="stat-num">${pctInt(detratores)}%</div><div class="stat-label">Detratores</div></div>
+  `;
+}
+
+async function createNpsEvent(){
+  if(S.role!=='gestor'){ toast('Apenas o gestor cria eventos de NPS.'); return; }
+  const name = document.getElementById('npse_name').value.trim();
+  const eventDate = document.getElementById('npse_date').value || '';
+  const closesRaw = document.getElementById('npse_closes').value;
+  if(!name){ toast('Dê um nome para o evento.'); return; }
+  if(!eventDate){ toast('Informe a data do evento.'); return; }
+  if(!closesRaw){ toast('Informe até quando as avaliações ficam abertas.'); return; }
+  const closesDate = new Date(closesRaw);
+  if(isNaN(closesDate)){ toast('Data/hora limite inválida.'); return; }
+
+  const data = {
+    name, eventDate,
+    closesAt: firebase.firestore.Timestamp.fromDate(closesDate),
+    status: 'ativo',
+    responseCount: 0,
+    createdAt: new Date().toISOString(),
+    createdBy: S.me.id,
+  };
+  let ref;
+  try{ ref = await npsEventsCol().add(data); }
+  catch(e){ console.error(e); toast('Não foi possível criar o evento.'); return; }
+  await logActivity('criou','npsEvent', name, 'Criou o evento de NPS "'+name+'".');
+  toast('Evento criado.');
+  openNpsQrModal(ref.id);
+}
+
+async function closeNpsEventNow(eventId){
+  if(S.role!=='gestor'){ toast('Apenas o gestor encerra eventos.'); return; }
+  const ev = S.npsEvents.find(e=>e.id===eventId);
+  if(!ev) return;
+  if(!confirm('Encerrar agora o evento "'+ev.name+'"? Ninguém mais poderá enviar avaliações.')) return;
+  try{ await npsEventsCol().doc(eventId).update({status:'encerrado'}); }
+  catch(e){ toast('Não foi possível encerrar o evento.'); return; }
+  await logActivity('editou','npsEvent', ev.name, 'Encerrou manualmente o evento de NPS "'+ev.name+'".');
+  toast('Evento encerrado.');
+}
+
+function copyNpsLink(eventId){
+  const link = npsPublicLink(eventId);
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(link).then(()=>toast('Link copiado.')).catch(()=>toast('Link: '+link));
+  } else {
+    toast('Link: '+link);
+  }
+}
+
 /* ===================== modais: estado ===================== */
 let jobModalState = null;     // {jobId, mode:'create'|'view'|'edit'}
 let clientModalState = null;  // {clientId, editing}
 let userModalState = null;    // userId
+let npsModalState = null;     // {type:'create'|'qr'|'results', eventId}
 
 function openJobModal(jobId){
   jobModalState = {jobId: jobId||null, mode: jobId?'view':'create'};
-  clientModalState = null; userModalState = null;
+  clientModalState = null; userModalState = null; npsModalState = null;
   renderModal();
 }
 function openClientModal(clientId, editing){
   clientModalState = {clientId: clientId||null, editing: !!editing || !clientId};
-  jobModalState = null; userModalState = null;
+  jobModalState = null; userModalState = null; npsModalState = null;
   renderModal();
 }
 function openUserModal(userId){
   userModalState = userId;
-  jobModalState = null; clientModalState = null;
+  jobModalState = null; clientModalState = null; npsModalState = null;
+  renderModal();
+}
+function openNpsCreateModal(){
+  if(S.role!=='gestor'){ toast('Apenas o gestor cria eventos de NPS.'); return; }
+  npsModalState = {type:'create'};
+  jobModalState = null; clientModalState = null; userModalState = null;
+  renderModal();
+}
+function openNpsQrModal(eventId){
+  npsModalState = {type:'qr', eventId};
+  jobModalState = null; clientModalState = null; userModalState = null;
+  renderModal();
+}
+function openNpsResultsModal(eventId){
+  if(S.role!=='gestor'){ toast('Apenas o gestor visualiza resultados.'); return; }
+  npsModalState = {type:'results', eventId};
+  jobModalState = null; clientModalState = null; userModalState = null;
   renderModal();
 }
 function closeModal(){
-  jobModalState = null; clientModalState = null; userModalState = null;
+  jobModalState = null; clientModalState = null; userModalState = null; npsModalState = null;
+  stopNpsResultsListener();
   document.getElementById('modalRoot').innerHTML = '';
 }
 
@@ -1173,6 +1507,15 @@ function renderModal(){
     const u = S.users.find(x=>x.id===userModalState);
     if(!u){ closeModal(); return; }
     root.innerHTML = userModalHTML(u);
+  } else if(npsModalState){
+    if(npsModalState.type==='create'){
+      root.innerHTML = npsEventFormHTML();
+    } else {
+      const ev = S.npsEvents.find(x=>x.id===npsModalState.eventId);
+      if(!ev){ closeModal(); return; }
+      if(npsModalState.type==='qr') root.innerHTML = npsQrModalHTML(ev);
+      else { root.innerHTML = npsResultsModalHTML(ev); startNpsResultsListener(ev.id); }
+    }
   } else {
     root.innerHTML = '';
     return;
@@ -1520,6 +1863,13 @@ function bindPageEvents(){
     } else {
       document.querySelectorAll('[data-edit-user]').forEach(el=>{ el.onclick = ()=>openUserModal(el.dataset.editUser); });
     }
+  } else if(S.page==='nps'){
+    const nb = document.getElementById('newNpsEventBtn');
+    if(nb) nb.onclick = openNpsCreateModal;
+    document.querySelectorAll('[data-nps-copy]').forEach(el=>{ el.onclick = ()=>copyNpsLink(el.dataset.npsCopy); });
+    document.querySelectorAll('[data-nps-qr]').forEach(el=>{ el.onclick = ()=>openNpsQrModal(el.dataset.npsQr); });
+    document.querySelectorAll('[data-nps-results]').forEach(el=>{ el.onclick = ()=>openNpsResultsModal(el.dataset.npsResults); });
+    document.querySelectorAll('[data-nps-close]').forEach(el=>{ el.onclick = ()=>closeNpsEventNow(el.dataset.npsClose); });
   }
 }
 
@@ -1562,6 +1912,10 @@ function bindModalEvents(){
 
   const saveUser = document.getElementById('saveUser');
   if(saveUser) saveUser.onclick = saveUserForm;
+
+  const saveNpsEventBtn = document.getElementById('saveNpsEvent');
+  if(saveNpsEventBtn) saveNpsEventBtn.onclick = createNpsEvent;
+  ov.querySelectorAll('[data-nps-copy]').forEach(el=>{ el.onclick = ()=>copyNpsLink(el.dataset.npsCopy); });
 
   const reassign = document.getElementById('reassignSelect');
   if(reassign) reassign.onchange = ()=>reassignJob(reassign.value);
