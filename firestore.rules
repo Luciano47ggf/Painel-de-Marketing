@@ -61,12 +61,13 @@ service cloud.firestore {
     }
 
     /* ---------- clientes ----------
-       Gestor: cadastra, edita dados e exclui.
-       Executor: pode registrar contatos/acompanhamentos (so mexe no
-       historico, ultimo contato e proximo acompanhamento). */
+       Gestor: edita dados de clientes existentes e exclui.
+       Executor: pode cadastrar novos clientes e registrar
+       contatos/acompanhamentos (so mexe no historico, ultimo contato e
+       proximo acompanhamento de um cliente ja existente). */
     match /clients/{clientId} {
       allow read: if isActive();
-      allow create: if isGestor();
+      allow create: if isActive();
       allow delete: if isGestor();
       allow update: if isGestor()
         || (isActive() && changedOnly(['timeline','lastContact','nextFollowUp','updatedAt']));

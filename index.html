@@ -609,33 +609,53 @@ function resetAppState(){
   S.role = null; S.status = null;
   S.me = {id:null, name:'', email:null};
   S.page = 'home';
+  // os filtros sao so visuais (nunca limitam a consulta ao Firestore), mas
+  // precisam voltar ao padrao no logout/troca de conta -- senao "Só os
+  // meus" marcado por uma pessoa pode continuar ativo e esconder o quadro
+  // inteiro da proxima pessoa que logar no mesmo navegador.
+  S.filters = { q:'', onlyMine:false, showArchived:false, brand:'todas' };
+  S.clientFilters = { q:'', level:'todos' };
+  S.adminFilters = { q:'', entity:'todas', user:'todos', from:'', to:'' };
+  S.adminTab = 'usuarios';
   const main = document.getElementById('main');
   if(main) main.innerHTML = '';
 }
 
+let syncErrorShown = false;
+function reportSyncError(what, e){
+  console.warn(what, e);
+  if(syncErrorShown) return;
+  syncErrorShown = true;
+  const isPerm = e && (e.code==='permission-denied' || /permission/i.test(e.message||''));
+  toast(isPerm
+    ? 'Sem permissão para carregar alguns dados. Confira se as regras do Firestore foram publicadas.'
+    : 'Não foi possível sincronizar alguns dados. Verifique sua conexão.');
+}
+
 function subscribe(){
+  syncErrorShown = false;
   const u1 = jobsCol().onSnapshot(qs=>{
     S.jobs = qs.docs.map(d=>Object.assign({id:d.id}, d.data()));
     render();
-  }, e=>console.warn('jobs sub', e));
+  }, e=>reportSyncError('jobs sub', e));
   const u2 = clientsCol().onSnapshot(qs=>{
     S.clients = qs.docs.map(d=>Object.assign({id:d.id}, d.data()));
     render();
-  }, e=>console.warn('clients sub', e));
+  }, e=>reportSyncError('clients sub', e));
   const u3 = usersCol().onSnapshot(qs=>{
     S.users = qs.docs.map(d=>Object.assign({id:d.id}, d.data()));
     render();
-  }, e=>console.warn('users sub', e));
+  }, e=>reportSyncError('users sub', e));
   S.unsubs.push(u1,u2,u3);
   if(S.role==='gestor'){
     const u4 = logsCol().orderBy('ts','desc').limit(300).onSnapshot(qs=>{
       S.logEntries = qs.docs.map(d=>Object.assign({id:d.id}, d.data()));
       render();
-    }, e=>console.warn('logs sub', e));
+    }, e=>reportSyncError('logs sub', e));
     const u5 = npsEventsCol().onSnapshot(qs=>{
       S.npsEvents = qs.docs.map(d=>Object.assign({id:d.id}, d.data()));
       render();
-    }, e=>console.warn('nps events sub', e));
+    }, e=>reportSyncError('nps events sub', e));
     S.unsubs.push(u4, u5);
   }
 }
@@ -992,8 +1012,6 @@ function clientsHTML(){
   const upcoming7 = S.clients.filter(c=>c.nextFollowUp && c.nextFollowUp>today && daysUntil(parseISODate(c.nextFollowUp))<=7).sort((a,b)=>a.nextFollowUp.localeCompare(b.nextFollowUp));
   const followList = overdue.concat(dueToday).concat(upcoming7).slice(0,6);
 
-  const canManage = S.role==='gestor';
-
   return `
     <h1 class="page-title">Clientes</h1>
     <p class="page-sub">Relacionamento premium — histórico, aniversários e acompanhamentos.</p>
@@ -1028,7 +1046,7 @@ function clientsHTML(){
       </select>
       <span style="flex:1"></span>
       <button class="btn" id="exportCsvBtn">Exportar CSV</button>
-      <button class="btn primary" id="newClientBtn" ${canManage?'':'disabled title="Só o gestor cadastra clientes"'}>+ Novo cliente</button>
+      <button class="btn primary" id="newClientBtn">+ Novo cliente</button>
     </div>
     <div class="table-wrap">
       ${list.length ? `
@@ -1846,7 +1864,7 @@ function bindPageEvents(){
     const lf = document.getElementById('clientLevelFilter');
     if(lf) lf.onchange = ()=>{ S.clientFilters.level = lf.value; render(); };
     const nb = document.getElementById('newClientBtn');
-    if(nb) nb.onclick = ()=>{ if(S.role!=='gestor'){ toast('Só o gestor cadastra novos clientes.'); return;} openClientModal(null); };
+    if(nb) nb.onclick = ()=>openClientModal(null);
     const ex = document.getElementById('exportCsvBtn');
     if(ex) ex.onclick = exportClientsCsv;
     document.querySelectorAll('[data-client]').forEach(el=>{ el.onclick = ()=>openClientModal(el.dataset.client); });
@@ -2096,7 +2114,8 @@ async function handleFileUpload(e){
 
 /* ===================== ações: clientes ===================== */
 async function saveClientForm(){
-  if(S.role!=='gestor'){ toast('Apenas o gestor gerencia os dados do cliente.'); return; }
+  const isNew = !clientModalState.clientId;
+  if(!isNew && S.role!=='gestor'){ toast('Apenas o gestor edita os dados do cliente.'); return; }
   const name = document.getElementById('c_name').value.trim();
   if(!name){ toast('Dê um nome para o cliente.'); return; }
   const data = {
@@ -2113,7 +2132,6 @@ async function saveClientForm(){
     notes: document.getElementById('c_notes').value.trim(),
     updatedAt: new Date().toISOString(),
   };
-  const isNew = !clientModalState.clientId;
   try{
     if(isNew){
       data.timeline = []; data.lastContact = null; data.nextFollowUp = ''; data.createdAt = new Date().toISOString();
