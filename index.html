@@ -1547,8 +1547,8 @@ function jobFormModalHTML(job){
         </div>
         <div class="field"><label>Título</label><input type="text" id="f_title" value="${esc(job?job.title:'')}" placeholder="Ex.: Post de lançamento — coleção verão"></div>
         <div class="grid2">
-          <div class="field"><label>Cliente / solicitante</label>
-            <select id="f_client"><option value="">Sem cliente</option>${S.clients.map(c=>`<option value="${c.id}" ${job&&job.clientId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select>
+          <div class="field"><label>Link de referência</label>
+            <input type="url" id="f_link" value="${esc(job&&job.referenceLink?job.referenceLink:'')}" placeholder="https://...">
           </div>
           <div class="field"><label>Prioridade</label>
             <select id="f_priority">
@@ -1560,7 +1560,7 @@ function jobFormModalHTML(job){
           </div>
         </div>
         <div class="field"><label>Prazo</label><input type="date" id="f_due" value="${job&&job.dueDate?job.dueDate:''}"></div>
-        <div class="field"><label>Descrição / briefing</label><textarea id="f_desc" placeholder="O que precisa ser feito, referências, tom de voz…">${esc(job?(job.description||''):'')}</textarea></div>
+        <div class="field"><label>Descrição / briefing</label><textarea id="f_desc" placeholder="O que precisa ser feito, referências…">${esc(job?(job.description||''):'')}</textarea></div>
       </div>
       <div class="modal-foot">
         <button class="btn ghost" id="closeModal2">Cancelar</button>
@@ -1571,7 +1571,6 @@ function jobFormModalHTML(job){
 }
 
 function viewJobModalHTML(job){
-  const client = S.clients.find(c=>c.id===job.clientId);
   const isGestor = S.role==='gestor';
   const isAssignee = job.assignedTo===S.me.id;
   const brand = BRANDS[job.brand] || null;
@@ -1624,7 +1623,7 @@ function viewJobModalHTML(job){
         </div>
 
         <div class="grid2">
-          <div><div class="hint">Cliente / solicitante</div><div>${client?esc(client.name):'—'}</div></div>
+          <div><div class="hint">Link de referência</div><div>${job.referenceLink?`<a href="${esc(job.referenceLink)}" target="_blank" rel="noopener">${esc(job.referenceLink)}</a>`:'—'}</div></div>
           <div><div class="hint">Prazo</div><div class="${overdue?'text-danger':''}">${job.dueDate?fmtDate(job.dueDate):'—'}${overdue?' · atrasada':''}</div></div>
           <div><div class="hint">Criado por</div><div>${creatorName||'—'}</div></div>
           <div>
@@ -1937,7 +1936,7 @@ async function createJob(){
   if(!title){ toast('Dê um título para a demanda.'); return; }
   const brandEl = document.querySelector('input[name="f_brand"]:checked');
   const brand = brandEl ? brandEl.value : BRAND_LIST[0].id;
-  const clientId = document.getElementById('f_client').value || null;
+  const referenceLink = document.getElementById('f_link').value.trim();
   const priority = document.getElementById('f_priority').value;
   const dueDate = document.getElementById('f_due').value || '';
   const description = document.getElementById('f_desc').value || '';
@@ -1949,7 +1948,7 @@ async function createJob(){
 
   const data = {
     code, title, description, priority, dueDate, brand,
-    clientId, status:'demandas', createdBy:S.me.id, assignedTo:null,
+    referenceLink, status:'demandas', createdBy:S.me.id, assignedTo:null,
     attachments:[], comments:[], archived:false,
     createdAt:now, updatedAt:now,
   };
@@ -1971,7 +1970,7 @@ async function saveJobEdit(){
   const patch = {
     title,
     brand: brandEl?brandEl.value:job.brand,
-    clientId: document.getElementById('f_client').value || null,
+    referenceLink: document.getElementById('f_link').value.trim(),
     priority: document.getElementById('f_priority').value,
     dueDate: document.getElementById('f_due').value || '',
     description: document.getElementById('f_desc').value || '',
