@@ -670,17 +670,17 @@ function subscribe(){
     S.users = qs.docs.map(d=>Object.assign({id:d.id}, d.data()));
     render();
   }, e=>reportSyncError('users sub', e));
-  S.unsubs.push(u1,u2,u3);
+  const uNps = npsEventsCol().onSnapshot(qs=>{
+    S.npsEvents = qs.docs.map(d=>Object.assign({id:d.id}, d.data()));
+    render();
+  }, e=>reportSyncError('nps events sub', e));
+  S.unsubs.push(u1,u2,u3,uNps);
   if(S.role==='gestor'){
     const u4 = logsCol().orderBy('ts','desc').limit(300).onSnapshot(qs=>{
       S.logEntries = qs.docs.map(d=>Object.assign({id:d.id}, d.data()));
       render();
     }, e=>reportSyncError('logs sub', e));
-    const u5 = npsEventsCol().onSnapshot(qs=>{
-      S.npsEvents = qs.docs.map(d=>Object.assign({id:d.id}, d.data()));
-      render();
-    }, e=>reportSyncError('nps events sub', e));
-    S.unsubs.push(u4, u5);
+    S.unsubs.push(u4);
   }
 }
 
