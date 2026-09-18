@@ -386,6 +386,7 @@ const S = {
   npsEvents: [],
   filters: { q:'', onlyMine:false, showArchived:false, brand:'todas' },
   clientFilters: { q:'', level:'todos' },
+  historyFilters: { q:'', user:'todos' },
   adminFilters: { q:'', entity:'todas', user:'todos', from:'', to:'' },
   adminTab: 'usuarios',
   logEntries: [],
@@ -462,6 +463,17 @@ function validEmail(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
 
 function startOfToday(){ const n = new Date(); n.setHours(0,0,0,0); return n; }
 function todayISO(){ const n = startOfToday(); return n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0'); }
+
+const HISTORY_DAYS = 30;
+function daysSince(iso){
+  if(!iso) return -1;
+  const d = new Date(iso);
+  if(isNaN(d)) return -1;
+  return Math.floor((Date.now() - d.getTime()) / 86400000);
+}
+function isInHistory(j){
+  return j.status==='finalizado' && j.finalizedAt && daysSince(j.finalizedAt) >= HISTORY_DAYS;
+}
 function parseISODate(s){
   if(!s) return null;
   const parts = s.split('-').map(Number);
@@ -820,6 +832,7 @@ const NAV_ITEMS = [
   {key:'home',    label:'Início',         icon:'⌂'},
   {key:'board',   label:'Quadro',         icon:'▦'},
   {key:'clients', label:'Clientes',       icon:'◐'},
+  {key:'history', label:'Histórico',      icon:'🕘'},
   {key:'nps',     label:'NPS',            icon:'✦', gestorOnly:true},
   {key:'admin',   label:'Administração',  icon:'≣', gestorOnly:true},
 ];
@@ -851,6 +864,7 @@ function render(){
   if(S.page==='home') main.innerHTML = homeHTML();
   else if(S.page==='board') main.innerHTML = boardHTML();
   else if(S.page==='clients') main.innerHTML = clientsHTML();
+  else if(S.page==='history') main.innerHTML = historyHTML();
   else if(S.page==='nps') main.innerHTML = npsHTML();
   else main.innerHTML = adminHTML();
   bindPageEvents();
@@ -908,6 +922,7 @@ function homeHTML(){
 
 /* ===================== quadro (board) ===================== */
 function jobMatchesFilters(j){
+  if(isInHistory(j)) return false;
   if(!S.filters.showArchived && j.archived) return false;
   if(S.filters.showArchived && !j.archived) return false;
   if(S.filters.brand && S.filters.brand!=='todas' && j.brand!==S.filters.brand) return false;
@@ -992,6 +1007,66 @@ function cardHTML(j){
         ${assigneeId ? `<span class="avatar" style="background:${colorFor(assigneeId)}" title="${esc(name||'')}">${initials(name||'?')}</span>` : ''}
       </div>
     </div>
+  `;
+}
+
+/* ===================== histórico (finalizadas há 30+ dias) ===================== */
+function historyHTML(){
+  const f = S.historyFilters;
+  const isGestor = S.role==='gestor';
+  let list = S.jobs.filter(isInHistory);
+
+  if(!isGestor){
+    list = list.filter(j=>j.createdBy===S.me.id || j.assignedTo===S.me.id);
+  } else if(f.user!=='todos'){
+    list = list.filter(j=>j.createdBy===f.user || j.assignedTo===f.user);
+  }
+
+  if(f.q){
+    const q = f.q.toLowerCase();
+    list = list.filter(j=>{
+      const client = S.clients.find(c=>c.id===j.clientId);
+      const hay = [j.code, j.title, client?client.name:''].join(' ').toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
+  list = list.slice().sort((a,b)=>(b.finalizedAt||'').localeCompare(a.finalizedAt||''));
+
+  const userIds = isGestor ? Array.from(new Set(S.jobs.filter(isInHistory).flatMap(j=>[j.createdBy,j.assignedTo]).filter(Boolean))) : [];
+
+  return `
+    <h1 class="page-title">Histórico</h1>
+    <p class="page-sub">Demandas finalizadas há mais de ${HISTORY_DAYS} dias, arquivadas automaticamente do quadro.</p>
+    <div class="toolbar">
+      <input class="search" id="historySearch" placeholder="Buscar por código, título ou cliente…" value="${esc(f.q)}">
+      ${isGestor ? `
+      <select id="historyUser">
+        <option value="todos" ${f.user==='todos'?'selected':''}>Todos os usuários</option>
+        ${userIds.map(id=>`<option value="${esc(id)}" ${f.user===id?'selected':''}>${esc(profileName(id) || id)}</option>`).join('')}
+      </select>` : ''}
+    </div>
+    ${list.length ? `
+    <table>
+      <thead><tr><th>Código</th><th>Título</th><th>Cliente</th><th>Marca</th><th>Responsável</th><th>Finalizado em</th><th>Prioridade</th></tr></thead>
+      <tbody>
+        ${list.map(j=>{
+          const client = S.clients.find(c=>c.id===j.clientId);
+          const brand = BRANDS[j.brand] || null;
+          const name = j.assignedTo ? profileName(j.assignedTo) : null;
+          return `
+          <tr data-history-job="${j.id}" style="cursor:pointer">
+            <td><b>${esc(j.code)}</b></td>
+            <td>${esc(j.title)}</td>
+            <td style="color:var(--text-muted)">${esc(client?client.name:'—')}</td>
+            <td style="color:var(--text-muted)">${brand?esc(brand.name):'—'}</td>
+            <td style="color:var(--text-muted)">${esc(name||'—')}</td>
+            <td style="white-space:nowrap;color:var(--text-muted)">${fmtDateTime(j.finalizedAt)}</td>
+            <td><span class="tag ${j.priority}">${PRIORITY_LABEL[j.priority]||j.priority}</span></td>
+          </tr>
+        `;}).join('')}
+      </tbody>
+    </table>` : `<div class="table-empty">Nenhuma demanda no histórico ainda.</div>`}
   `;
 }
 
@@ -1880,6 +1955,12 @@ function bindPageEvents(){
     } else {
       document.querySelectorAll('[data-edit-user]').forEach(el=>{ el.onclick = ()=>openUserModal(el.dataset.editUser); });
     }
+  } else if(S.page==='history'){
+    const s = document.getElementById('historySearch');
+    if(s) s.oninput = ()=>{ S.historyFilters.q = s.value; render(); };
+    const hu = document.getElementById('historyUser');
+    if(hu) hu.onchange = ()=>{ S.historyFilters.user = hu.value; render(); };
+    document.querySelectorAll('[data-history-job]').forEach(el=>{ el.onclick = ()=>openJobModal(el.dataset.historyJob); });
   } else if(S.page==='nps'){
     const nb = document.getElementById('newNpsEventBtn');
     if(nb) nb.onclick = openNpsCreateModal;
@@ -2040,7 +2121,7 @@ async function handleJobAction(action){
     ok = await updateJob(job.id, {status:'producao'}, {action:'moveu', description:'Devolveu '+code+' para produção — solicitou ajustes.'});
     if(ok) toast('Ajustes solicitados.');
   } else if(action==='approve'){
-    ok = await updateJob(job.id, {status:'finalizado'}, {action:'aprovou', description:'Aprovou e finalizou '+code+'.'});
+    ok = await updateJob(job.id, {status:'finalizado', finalizedAt:new Date().toISOString()}, {action:'aprovou', description:'Aprovou e finalizou '+code+'.'});
     if(ok) toast('Demanda finalizada!');
   } else if(action==='archive'){
     await updateJob(job.id, {archived:true}, {action:'editou', description:'Arquivou '+code+'.'});
