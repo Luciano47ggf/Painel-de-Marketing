@@ -845,7 +845,7 @@ const NAV_ITEMS = [
   {key:'board',   label:'Quadro',         icon:'▦'},
   {key:'clients', label:'Clientes',       icon:'◐'},
   {key:'history', label:'Histórico',      icon:'🕘'},
-  {key:'nps',     label:'NPS',            icon:'✦', gestorOnly:true},
+  {key:'nps',     label:'NPS',            icon:'✦'},
   {key:'admin',   label:'Administração',  icon:'≣', gestorOnly:true},
 ];
 
@@ -870,7 +870,7 @@ function renderSidebar(){
 
 function render(){
   if(!S.role) return; // tela de login cuida disso
-  if((S.page==='admin' || S.page==='nps') && S.role!=='gestor') S.page = 'home';
+  if(S.page==='admin' && S.role!=='gestor') S.page = 'home';
   renderSidebar();
   const main = document.getElementById('main');
   if(S.page==='home') main.innerHTML = homeHTML();
@@ -1245,9 +1245,6 @@ function fmtNpsClosesLabel(date){
 }
 
 function npsHTML(){
-  if(S.role!=='gestor'){
-    return `<div class="empty-state">Área restrita ao gestor.</div>`;
-  }
   const events = S.npsEvents.slice().sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
   const activeEvents = events.filter(npsIsOpen);
   const closedEvents = events.filter(ev=>!npsIsOpen(ev));
@@ -1289,7 +1286,7 @@ function npsEventCardHTML(ev){
         <button class="btn small" data-nps-copy="${ev.id}">Copiar link</button>
         <button class="btn small" data-nps-qr="${ev.id}">Ver QR Code</button>
         <button class="btn small" data-nps-results="${ev.id}">Ver resultados</button>
-        ${open ? `<button class="btn small danger" data-nps-close="${ev.id}">Encerrar agora</button>` : ''}
+        ${open && S.role==='gestor' ? `<button class="btn small danger" data-nps-close="${ev.id}">Encerrar agora</button>` : ''}
       </div>
     </div>
   `;
@@ -1476,7 +1473,6 @@ function renderNpsResults(docs){
 }
 
 async function createNpsEvent(){
-  if(S.role!=='gestor'){ toast('Apenas o gestor cria eventos de NPS.'); return; }
   const name = document.getElementById('npse_name').value.trim();
   const eventDate = document.getElementById('npse_date').value || '';
   const closesRaw = document.getElementById('npse_closes').value;
@@ -1544,7 +1540,6 @@ function openUserModal(userId){
   renderModal();
 }
 function openNpsCreateModal(){
-  if(S.role!=='gestor'){ toast('Apenas o gestor cria eventos de NPS.'); return; }
   npsModalState = {type:'create'};
   jobModalState = null; clientModalState = null; userModalState = null;
   renderModal();
@@ -1555,7 +1550,6 @@ function openNpsQrModal(eventId){
   renderModal();
 }
 function openNpsResultsModal(eventId){
-  if(S.role!=='gestor'){ toast('Apenas o gestor visualiza resultados.'); return; }
   npsModalState = {type:'results', eventId};
   jobModalState = null; clientModalState = null; userModalState = null;
   renderModal();

@@ -88,7 +88,10 @@ service cloud.firestore {
     }
 
     /* ---------- NPS de eventos ----------
-       Gestor: cria, edita e encerra eventos; le as respostas e resultados.
+       Qualquer pessoa ativa (gestor ou executor) cria e le eventos e
+       resultados. So o gestor edita eventos de outra pessoa, exclui e
+       encerra manualmente (a propria tela ja esconde "Encerrar agora"
+       para quem nao e gestor).
        Publico (sem login): consegue abrir UM evento pelo id (para o
        formulario /nps/?event=ID funcionar e mostrar "encerrado" quando for
        o caso), mas nao pode listar todos os eventos. Enquanto o evento
@@ -99,8 +102,8 @@ service cloud.firestore {
        leitura ou escrita publica e permitida. */
     match /npsEvents/{eventId} {
       allow get: if true;
-      allow list: if isGestor();
-      allow create: if isGestor()
+      allow list: if isActive();
+      allow create: if isActive()
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.status == 'ativo';
       allow delete: if isGestor();
@@ -122,7 +125,7 @@ service cloud.firestore {
           request.resource.data.score is int &&
           request.resource.data.score >= 1 && request.resource.data.score <= 10 &&
           request.resource.data.createdAt == request.time;
-        allow read: if isGestor();
+        allow read: if isActive();
         allow update, delete: if false;
       }
     }
