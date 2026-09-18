@@ -2021,24 +2021,27 @@ async function handleJobAction(action){
   const gestorOnly = ['reject','approve','archive','unarchive','delete','edit'];
   if(gestorOnly.includes(action) && S.role!=='gestor'){ toast('Apenas o gestor pode fazer isso.'); return; }
 
+  const statusChangeActions = ['assume','send-approval','reject','approve'];
+  let ok = true;
+
   if(action==='edit'){
     jobModalState.mode = 'edit';
     renderModal();
     return;
   } else if(action==='assume'){
     if(job.status!=='demandas'){ toast('Essa demanda já foi assumida.'); return; }
-    await updateJob(job.id, {status:'producao', assignedTo:S.me.id}, {action:'moveu', description:'Assumiu a demanda '+code+' — moveu de Demandas para Em produção.'});
-    toast('Demanda assumida.');
+    ok = await updateJob(job.id, {status:'producao', assignedTo:S.me.id}, {action:'moveu', description:'Assumiu a demanda '+code+' — moveu de Demandas para Em produção.'});
+    if(ok) toast('Demanda assumida.');
   } else if(action==='send-approval'){
     if(S.role!=='gestor' && job.assignedTo!==S.me.id){ toast('Só quem está com a demanda pode enviar para aprovação.'); return; }
-    await updateJob(job.id, {status:'aprovacao'}, {action:'moveu', description:'Enviou '+code+' para aprovação.'});
-    toast('Enviado para aprovação.');
+    ok = await updateJob(job.id, {status:'aprovacao'}, {action:'moveu', description:'Enviou '+code+' para aprovação.'});
+    if(ok) toast('Enviado para aprovação.');
   } else if(action==='reject'){
-    await updateJob(job.id, {status:'producao'}, {action:'moveu', description:'Devolveu '+code+' para produção — solicitou ajustes.'});
-    toast('Ajustes solicitados.');
+    ok = await updateJob(job.id, {status:'producao'}, {action:'moveu', description:'Devolveu '+code+' para produção — solicitou ajustes.'});
+    if(ok) toast('Ajustes solicitados.');
   } else if(action==='approve'){
-    await updateJob(job.id, {status:'finalizado'}, {action:'aprovou', description:'Aprovou e finalizou '+code+'.'});
-    toast('Demanda finalizada!');
+    ok = await updateJob(job.id, {status:'finalizado'}, {action:'aprovou', description:'Aprovou e finalizou '+code+'.'});
+    if(ok) toast('Demanda finalizada!');
   } else if(action==='archive'){
     await updateJob(job.id, {archived:true}, {action:'editou', description:'Arquivou '+code+'.'});
   } else if(action==='unarchive'){
@@ -2051,6 +2054,8 @@ async function handleJobAction(action){
     closeModal(); toast('Demanda excluída.');
     return;
   }
+
+  if(statusChangeActions.includes(action) && ok){ closeModal(); return; }
   renderModal();
 }
 
