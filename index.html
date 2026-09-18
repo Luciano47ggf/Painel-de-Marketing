@@ -384,7 +384,7 @@ const S = {
   clients: [],
   users: [],
   npsEvents: [],
-  filters: { q:'', onlyMine:false, showArchived:false, brand:'todas' },
+  filters: { q:'', onlyMine:false, brand:'todas' },
   clientFilters: { q:'', level:'todos' },
   historyFilters: { q:'', user:'todos' },
   adminFilters: { q:'', entity:'todas', user:'todos', from:'', to:'' },
@@ -472,7 +472,9 @@ function daysSince(iso){
   return Math.floor((Date.now() - d.getTime()) / 86400000);
 }
 function isInHistory(j){
-  return j.status==='finalizado' && j.finalizedAt && daysSince(j.finalizedAt) >= HISTORY_DAYS;
+  if(j.status!=='finalizado') return false;
+  if(j.archived) return true;
+  return !!j.finalizedAt && daysSince(j.finalizedAt) >= HISTORY_DAYS;
 }
 function parseISODate(s){
   if(!s) return null;
@@ -625,8 +627,9 @@ function resetAppState(){
   // precisam voltar ao padrao no logout/troca de conta -- senao "Só os
   // meus" marcado por uma pessoa pode continuar ativo e esconder o quadro
   // inteiro da proxima pessoa que logar no mesmo navegador.
-  S.filters = { q:'', onlyMine:false, showArchived:false, brand:'todas' };
+  S.filters = { q:'', onlyMine:false, brand:'todas' };
   S.clientFilters = { q:'', level:'todos' };
+  S.historyFilters = { q:'', user:'todos' };
   S.adminFilters = { q:'', entity:'todas', user:'todos', from:'', to:'' };
   S.adminTab = 'usuarios';
   const main = document.getElementById('main');
@@ -923,8 +926,6 @@ function homeHTML(){
 /* ===================== quadro (board) ===================== */
 function jobMatchesFilters(j){
   if(isInHistory(j)) return false;
-  if(!S.filters.showArchived && j.archived) return false;
-  if(S.filters.showArchived && !j.archived) return false;
   if(S.filters.brand && S.filters.brand!=='todas' && j.brand!==S.filters.brand) return false;
   if(S.filters.onlyMine){
     const mine = j.createdBy===S.me.id || j.assignedTo===S.me.id;
@@ -957,7 +958,6 @@ function boardHTML(){
         ${BRAND_LIST.map(b=>`<option value="${b.id}" ${S.filters.brand===b.id?'selected':''}>${b.name}</option>`).join('')}
       </select>
       <label class="chk"><input type="checkbox" id="onlyMine" ${S.filters.onlyMine?'checked':''}> Só os meus</label>
-      <label class="chk"><input type="checkbox" id="showArchived" ${S.filters.showArchived?'checked':''}> Arquivados</label>
       <span style="flex:1"></span>
       <button class="btn primary" id="newJobBtn" ${canCreate?'':'disabled title="Só o gestor cria demandas"'}>+ Nova demanda</button>
     </div>
@@ -1684,7 +1684,7 @@ function viewJobModalHTML(job){
       actions.push(`<div class="locked-note">Aguardando aprovação do gestor.</div>`);
     }
   } else if(job.status==='finalizado'){
-    actions.push(`<div class="locked-note">Demanda finalizada${job.archived?' e arquivada':''}.</div>`);
+    actions.push(`<div class="locked-note">Demanda finalizada${job.archived?' e arquivada — já está no Histórico':''}.</div>`);
     if(isGestor) actions.push(`<button class="btn ghost" data-action="${job.archived?'unarchive':'archive'}">${job.archived?'Reabrir':'Arquivar'}</button>`);
   }
   if(isGestor) actions.push(`<button class="btn danger" data-action="delete">Excluir</button>`);
@@ -1928,8 +1928,6 @@ function bindPageEvents(){
     if(bf) bf.onchange = ()=>{ S.filters.brand = bf.value; render(); };
     const om = document.getElementById('onlyMine');
     if(om) om.onchange = ()=>{ S.filters.onlyMine = om.checked; render(); };
-    const sa = document.getElementById('showArchived');
-    if(sa) sa.onchange = ()=>{ S.filters.showArchived = sa.checked; render(); };
     const nb = document.getElementById('newJobBtn');
     if(nb) nb.onclick = ()=>{ if(S.role!=='gestor'){ toast('Só o gestor cria novas demandas.'); return;} openJobModal(null); };
     document.querySelectorAll('.card').forEach(el=>{ el.onclick = ()=>openJobModal(el.dataset.job); });
