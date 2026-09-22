@@ -170,6 +170,8 @@ select:focus{outline:2px solid var(--accent);outline-offset:-1px;}
 .card-date{font-size:12px;color:var(--text-muted);}
 .card-date.overdue{color:var(--danger);font-weight:600;}
 .card-spacer{flex:1;}
+.card.card-overdue{background:var(--danger-bg);border-color:var(--danger);}
+.card-overdue-tag{width:100%;margin-top:8px;font-family:'Oswald',sans-serif;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--danger);}
 .avatar{
   width:26px;height:26px;border-radius:50%;flex:0 0 auto;
   display:flex;align-items:center;justify-content:center;
@@ -324,6 +326,9 @@ tr.row-click:hover{background:var(--surface-2);}
 
 .toast{position:fixed;bottom:22px;right:22px;background:var(--text);color:var(--bg);padding:12px 18px;border-radius:10px;font-size:13px;z-index:300;box-shadow:var(--shadow);opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s;}
 .toast.show{opacity:1;transform:translateY(0);}
+.overdue-banner{position:fixed;top:0;left:0;right:0;display:none;align-items:center;justify-content:center;gap:14px;background:var(--danger);color:#fff;padding:12px 20px;font-size:13.5px;font-weight:600;z-index:400;box-shadow:var(--shadow);}
+.overdue-banner.show{display:flex;}
+.overdue-banner-close{background:none;border:none;color:#fff;font-size:18px;line-height:1;cursor:pointer;padding:0 4px;}
 .hint{font-size:12px;color:var(--text-muted);margin-top:4px;}
 .empty-state{text-align:center;padding:70px 20px;color:var(--text-muted);}
 .locked-note{font-size:12px;color:var(--text-muted);background:var(--surface-2);border:1px solid var(--border-soft);border-radius:9px;padding:9px 12px;margin-top:14px;}
@@ -362,6 +367,7 @@ tr.row-click:hover{background:var(--surface-2);}
 <div id="modalRoot"></div>
 <div id="onboard" style="display:none;"></div>
 <div class="toast" id="toast"></div>
+<div class="overdue-banner" id="overdueBanner"></div>
 
 <!-- Firebase (compat). Preencha FIREBASE_CONFIG logo abaixo com os dados do
      seu projeto Firebase para o painel funcionar com dados reais e
@@ -466,6 +472,14 @@ function toast(msg){
   t.classList.add('show');
   clearTimeout(t._h);
   t._h = setTimeout(()=>t.classList.remove('show'), 2600);
+}
+function showOverdueBanner(count){
+  const el = document.getElementById('overdueBanner');
+  if(!el) return;
+  const msg = count===1 ? 'Você tem 1 demanda com o prazo de entrega atrasado.' : `Você tem ${count} demandas com o prazo de entrega atrasado.`;
+  el.innerHTML = `<span>⚠️ ${esc(msg)}</span><button type="button" class="overdue-banner-close" id="overdueBannerClose" aria-label="Fechar aviso">×</button>`;
+  el.classList.add('show');
+  document.getElementById('overdueBannerClose').onclick = ()=>el.classList.remove('show');
 }
 function uid(){ return 'id'+Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
 function validEmail(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
@@ -627,11 +641,22 @@ function unsubscribeAll(){
   S.unsubs.forEach(u=>{ try{ u(); }catch(e){} });
   S.unsubs = [];
 }
+let overdueAlertShown = false;
+function checkOverdueAlert(){
+  if(overdueAlertShown) return;
+  overdueAlertShown = true;
+  const today = todayISO();
+  const count = S.jobs.filter(j=>!j.archived && j.status!=='finalizado' && j.dueDate && j.dueDate<today).length;
+  if(count>0) showOverdueBanner(count);
+}
 function resetAppState(){
   S.jobs = []; S.clients = []; S.users = []; S.logEntries = []; S.npsEvents = [];
   S.role = null; S.status = null;
   S.me = {id:null, name:'', email:null};
   S.page = 'home';
+  overdueAlertShown = false;
+  const banner = document.getElementById('overdueBanner');
+  if(banner) banner.classList.remove('show');
   // os filtros sao so visuais (nunca limitam a consulta ao Firestore), mas
   // precisam voltar ao padrao no logout/troca de conta -- senao "Só os
   // meus" marcado por uma pessoa pode continuar ativo e esconder o quadro
@@ -661,6 +686,7 @@ function subscribe(){
   const u1 = jobsCol().onSnapshot(qs=>{
     S.jobs = qs.docs.map(d=>Object.assign({id:d.id}, d.data()));
     render();
+    checkOverdueAlert();
   }, e=>reportSyncError('jobs sub', e));
   const u2 = clientsCol().onSnapshot(qs=>{
     S.clients = qs.docs.map(d=>Object.assign({id:d.id}, d.data()));
@@ -978,9 +1004,9 @@ function cardHTML(j){
   const attCount = (j.attachments||[]).length;
   const commentCount = (j.comments||[]).length;
   const brand = BRANDS[j.brand] || null;
-  const overdue = j.dueDate && j.status!=='finalizado' && j.dueDate < todayISO();
+  const overdue = !j.archived && j.dueDate && j.status!=='finalizado' && j.dueDate < todayISO();
   return `
-    <div class="card" data-job="${j.id}" style="--card-accent:${brand?brand.color:'var(--border-soft)'}">
+    <div class="card ${overdue?'card-overdue':''}" data-job="${j.id}" style="--card-accent:${overdue?'var(--danger)':(brand?brand.color:'var(--border-soft)')}">
       <div class="card-top">
         <div class="card-code">${esc(j.code)}${client?' · '+esc(client.name):''}</div>
         ${brand?`<div class="seal" title="${esc(brand.name)}"><img src="${brand.seal}" alt="${esc(brand.name)}"></div>`:''}
@@ -994,6 +1020,7 @@ function cardHTML(j){
         ${attCount ? `<span class="attach-count">📎 ${attCount}</span>` : ''}
         ${assigneeId ? `<span class="avatar" style="background:${colorFor(assigneeId)}" title="${esc(name||'')}">${initials(name||'?')}</span>` : ''}
       </div>
+      ${overdue ? `<div class="card-overdue-tag">Em atraso</div>` : ''}
     </div>
   `;
 }
