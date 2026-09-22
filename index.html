@@ -329,6 +329,8 @@ tr.row-click:hover{background:var(--surface-2);}
 .overdue-banner{position:fixed;top:0;left:0;right:0;display:none;align-items:center;justify-content:center;gap:14px;background:var(--danger);color:#fff;padding:12px 20px;font-size:13.5px;font-weight:600;z-index:400;box-shadow:var(--shadow);}
 .overdue-banner.show{display:flex;}
 .overdue-banner-close{background:none;border:none;color:#fff;font-size:18px;line-height:1;cursor:pointer;padding:0 4px;}
+.overdue-banner-view{background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.5);color:#fff;font-size:12.5px;font-weight:700;border-radius:99px;padding:5px 14px;cursor:pointer;}
+.overdue-banner-view:hover{background:rgba(255,255,255,.3);}
 .hint{font-size:12px;color:var(--text-muted);margin-top:4px;}
 .empty-state{text-align:center;padding:70px 20px;color:var(--text-muted);}
 .locked-note{font-size:12px;color:var(--text-muted);background:var(--surface-2);border:1px solid var(--border-soft);border-radius:9px;padding:9px 12px;margin-top:14px;}
@@ -473,13 +475,21 @@ function toast(msg){
   clearTimeout(t._h);
   t._h = setTimeout(()=>t.classList.remove('show'), 2600);
 }
-function showOverdueBanner(count){
+function showOverdueBanner(message, jobs){
   const el = document.getElementById('overdueBanner');
   if(!el) return;
-  const msg = count===1 ? 'Você tem 1 demanda com o prazo de entrega atrasado.' : `Você tem ${count} demandas com o prazo de entrega atrasado.`;
-  el.innerHTML = `<span>⚠️ ${esc(msg)}</span><button type="button" class="overdue-banner-close" id="overdueBannerClose" aria-label="Fechar aviso">×</button>`;
+  el.innerHTML = `<span>⚠️ ${esc(message)}</span><button type="button" class="overdue-banner-view" id="overdueBannerView">Ver demanda</button><button type="button" class="overdue-banner-close" id="overdueBannerClose" aria-label="Fechar aviso">×</button>`;
   el.classList.add('show');
-  document.getElementById('overdueBannerClose').onclick = ()=>el.classList.remove('show');
+  document.getElementById('overdueBannerClose').onclick = (e)=>{ e.stopPropagation(); el.classList.remove('show'); };
+  document.getElementById('overdueBannerView').onclick = ()=>{
+    el.classList.remove('show');
+    const target = (jobs||[]).slice().sort((a,b)=>(a.dueDate||'').localeCompare(b.dueDate||''))[0];
+    if(target){
+      S.page = 'board';
+      render();
+      openJobModal(target.id);
+    }
+  };
 }
 function uid(){ return 'id'+Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
 function validEmail(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
@@ -646,8 +656,16 @@ function checkOverdueAlert(){
   if(overdueAlertShown) return;
   overdueAlertShown = true;
   const today = todayISO();
-  const count = S.jobs.filter(j=>!j.archived && j.status!=='finalizado' && j.dueDate && j.dueDate<today).length;
-  if(count>0) showOverdueBanner(count);
+  const overdueJobs = S.jobs.filter(j=>!j.archived && j.status!=='finalizado' && j.dueDate && j.dueDate<today);
+  if(!overdueJobs.length) return;
+  if(S.role==='gestor'){
+    showOverdueBanner('Demandas em atraso', overdueJobs);
+  } else {
+    const mine = overdueJobs.filter(j=>j.assignedTo===S.me.id);
+    if(!mine.length) return;
+    const msg = mine.length===1 ? 'Você tem 1 demanda com o prazo de entrega atrasado.' : `Você tem ${mine.length} demandas com o prazo de entrega atrasado.`;
+    showOverdueBanner(msg, mine);
+  }
 }
 function resetAppState(){
   S.jobs = []; S.clients = []; S.users = []; S.logEntries = []; S.npsEvents = [];
@@ -1412,7 +1430,15 @@ function startNpsResultsListener(eventId){
   stopNpsResultsListener();
   npsResultsUnsub = npsEventsCol().doc(eventId).collection('responses').onSnapshot(qs=>{
     renderNpsResults(qs.docs.map(d=>d.data()));
-  }, e=>console.warn('nps results sub', e));
+  }, e=>{
+    console.warn('nps results sub', e);
+    const isPerm = e && (e.code==='permission-denied' || /permission/i.test(e.message||''));
+    const summaryText = document.getElementById('nps_summaryText');
+    if(summaryText) summaryText.textContent = isPerm
+      ? 'Sem permissão para carregar os resultados. Confira se as regras do Firestore foram publicadas.'
+      : 'Não foi possível carregar os resultados agora. Verifique sua conexão.';
+    toast(isPerm ? 'Sem permissão para ver os resultados do NPS.' : 'Não foi possível carregar os resultados do NPS.');
+  });
 }
 function stopNpsResultsListener(){
   if(npsResultsUnsub){ npsResultsUnsub(); npsResultsUnsub = null; }
@@ -1748,7 +1774,7 @@ function viewJobModalHTML(job){
         </div>
         <input type="file" id="fileInput" multiple style="display:none">
         <div class="upload-zone" id="uploadZone" style="margin-top:10px;">+ Anexar imagem, planilha, PDF ou outro arquivo</div>
-        ${!S.storage ? `<div class="hint" style="margin-top:6px;">Firebase Storage não configurado: arquivos de até 8 MB ficam salvos direto no Firestore.</div>` : ''}
+        ${!S.storage ? `<div class="hint" style="margin-top:6px;">Firebase Storage não configurado: arquivos de até 700 KB ficam salvos direto no Firestore.</div>` : ''}
 
         <div class="section-label">Comentários</div>
         <div id="commentList">
@@ -2172,7 +2198,9 @@ async function handleFileUpload(e){
   const job = S.jobs.find(j=>j.id===jobModalState.jobId);
   toast('Enviando '+files.length+' arquivo(s)…');
   const newAtt = [];
-  const MAX_SIZE = 8*1024*1024; // 8 MB por arquivo (sem Storage configurado)
+  const MAX_SIZE = 700*1024; // 700 KB por arquivo quando salvo direto no Firestore (o documento inteiro tem limite de 1 MiB)
+  const DOC_BUDGET = 900*1024; // margem de seguranca para o documento inteiro (attachments + resto dos campos)
+  let embeddedBytes = (job.attachments||[]).reduce((sum,a)=> sum + (a.dataUrl ? a.dataUrl.length : 0), 0);
 
   for(const f of files){
     let uploaded = false;
@@ -2187,9 +2215,14 @@ async function handleFileUpload(e){
       }catch(err){ console.warn('upload no Storage falhou, tentando anexo local', err); }
     }
     if(!uploaded){
-      if(f.size > MAX_SIZE){ toast(f.name+' é maior que 8 MB — configure o Firebase Storage para anexar arquivos maiores.'); continue; }
+      if(f.size > MAX_SIZE){ toast(f.name+' é maior que 700 KB — configure o Firebase Storage para anexar arquivos maiores.'); continue; }
       try{
         const dataUrl = await fileToDataUrl(f);
+        if(embeddedBytes + dataUrl.length > DOC_BUDGET){
+          toast('Não foi possível anexar '+f.name+': esta demanda já está perto do limite de anexos sem o Firebase Storage configurado.');
+          continue;
+        }
+        embeddedBytes += dataUrl.length;
         newAtt.push({id:uid(), name:f.name, contentType:f.type||'application/octet-stream', sizeBytes:f.size, dataUrl});
       }catch(err){ console.warn('anexo local falhou', err); toast('Falha ao anexar '+f.name); }
     }
@@ -2197,8 +2230,8 @@ async function handleFileUpload(e){
 
   if(newAtt.length){
     const attachments = (job.attachments||[]).concat(newAtt);
-    await updateJob(job.id, {attachments}, {action:'anexou', description:'Anexou '+newAtt.length+' arquivo(s) em '+job.code+'.'});
-    toast('Arquivo(s) anexado(s).');
+    const ok = await updateJob(job.id, {attachments}, {action:'anexou', description:'Anexou '+newAtt.length+' arquivo(s) em '+job.code+'.'});
+    if(ok) toast('Arquivo(s) anexado(s).');
   }
   e.target.value='';
   renderModal();
