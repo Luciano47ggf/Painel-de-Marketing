@@ -377,7 +377,6 @@ tr.row-click:hover{background:var(--surface-2);}
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-storage-compat.js"></script>
 
 <script>
 (function(){
@@ -393,7 +392,7 @@ const BRAND_LIST = Object.values(BRANDS);
 /* ===================== state ===================== */
 const S = {
   page: 'home',
-  db: null, auth: null, storage: null,
+  db: null, auth: null,
   me: { id: null, name: '', email: null },
   role: null,          // 'gestor' | 'executor' | null (não resolvido)
   status: null,        // 'ativo' | 'inativo' | null
@@ -582,7 +581,6 @@ function initFirebase(){
     if(!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
     S.auth = firebase.auth();
     S.db = firebase.firestore();
-    try{ S.storage = firebase.storage(); }catch(e){ S.storage = null; }
     return true;
   }catch(e){ console.error('Firebase init falhou', e); return false; }
 }
@@ -1774,7 +1772,7 @@ function viewJobModalHTML(job){
         </div>
         <input type="file" id="fileInput" multiple style="display:none">
         <div class="upload-zone" id="uploadZone" style="margin-top:10px;">+ Anexar imagem, planilha, PDF ou outro arquivo</div>
-        ${!S.storage ? `<div class="hint" style="margin-top:6px;">Firebase Storage não configurado: arquivos de até 700 KB ficam salvos direto no Firestore.</div>` : ''}
+        <div class="hint" style="margin-top:6px;">Arquivos de até 10 MB, guardados de forma privada.</div>
 
         <div class="section-label">Comentários</div>
         <div id="commentList">
@@ -1798,13 +1796,14 @@ function viewJobModalHTML(job){
 
 function attachItemHTML(a){
   const isImg = (a.contentType||'').startsWith('image/');
-  const url = a.dataUrl || a.url || '';
   return `
     <div class="attach-item">
-      ${isImg ? `<img class="attach-thumb" src="${url}">` : `<div class="attach-icon">📄</div>`}
+      ${isImg
+        ? `<img class="attach-thumb" data-thumb-path="${esc(a.path)}" alt="">`
+        : `<div class="attach-icon">📄</div>`}
       <div class="attach-name">${esc(a.name)}</div>
       <div class="attach-size">${fmtBytes(a.sizeBytes)}</div>
-      <a class="btn small ghost" href="${url}" target="_blank" download="${esc(a.name)}">Abrir</a>
+      <button type="button" class="btn small ghost" data-open-attach="${esc(a.path)}">Abrir</button>
       <button type="button" class="btn small danger" data-remove-attach="${a.id}">Remover</button>
     </div>
   `;
@@ -2057,7 +2056,13 @@ function bindModalEvents(){
   const fi = document.getElementById('fileInput');
   if(uz && fi){ uz.onclick = ()=>fi.click(); fi.onchange = handleFileUpload; }
 
-  ov.querySelectorAll('[data-remove-attach]').forEach(el=>{ el.onclick = ()=>removeAttachment(el.dataset.removeAttach); });
+  ov.querySelectorAll('[data-open-attach]').forEach(el=>{
+    el.onclick = ()=>openAttachment(el.dataset.openAttach);
+  });
+  ov.querySelectorAll('[data-remove-attach]').forEach(el=>{
+    el.onclick = ()=>removeAttachment(el.dataset.removeAttach);
+  });
+  loadAttachmentThumbnails(ov);
 
   const addC = document.getElementById('addComment');
   if(addC) addC.onclick = addCommentToJob;
@@ -2115,31 +2120,9 @@ async function saveJobEdit(){
 
 async function updateJob(jobId, patch, logMsg){
   patch.updatedAt = new Date().toISOString();
-
-  try{
-    await jobsCol().doc(jobId).update(patch);
-
-    // Mantém o estado local sincronizado imediatamente com o Firestore.
-    // Isso faz anexos, comentários e outras alterações aparecerem no modal
-    // sem precisar fechar e abrir a demanda novamente.
-    const idx = S.jobs.findIndex(j=>j.id===jobId);
-    if(idx !== -1){
-      S.jobs[idx] = Object.assign({}, S.jobs[idx], patch);
-    }
-  }catch(e){
-    console.error('Erro ao atualizar demanda:', e);
-    const isPerm = e && (e.code==='permission-denied' || /permission/i.test(e.message||''));
-    toast(isPerm
-      ? 'Sem permissão para salvar esta alteração.'
-      : 'Não foi possível salvar. Verifique sua conexão ou permissão.');
-    return false;
-  }
-
-  if(logMsg){
-    const j = S.jobs.find(x=>x.id===jobId);
-    await logActivity(logMsg.action,'job', (j&&j.code)||jobId, logMsg.description);
-  }
-
+  try{ await jobsCol().doc(jobId).update(patch); }
+  catch(e){ console.error(e); toast('Não foi possível salvar. Verifique sua conexão ou permissão.'); return false; }
+  if(logMsg){ const j = S.jobs.find(x=>x.id===jobId); await logActivity(logMsg.action,'job', (j&&j.code)||jobId, logMsg.description); }
   return true;
 }
 
@@ -2208,120 +2191,91 @@ async function addCommentToJob(){
   renderModal();
 }
 
-function fileToDataUrl(file){
-  return new Promise((resolve,reject)=>{
-    const r = new FileReader();
-    r.onload = ()=>resolve(r.result);
-    r.onerror = reject;
-    r.readAsDataURL(file);
+/* ===================== anexos (Supabase Storage via /api) =====================
+   O arquivo em si nunca passa pelo nosso backend nem fica embutido no
+   Firestore -- so os metadados (nome, tamanho, tipo e "path" no bucket do
+   Supabase) sao salvos na demanda. As rotas em /api/attachments/* validam
+   o ID token do Firebase antes de gerar qualquer URL assinada ou apagar
+   um arquivo, usando a service role key do Supabase (que so existe no
+   servidor). */
+async function firebaseIdToken(){
+  if(!S.auth || !S.auth.currentUser) throw new Error('not-authenticated');
+  return S.auth.currentUser.getIdToken();
+}
+
+async function callAttachmentApi(path, body){
+  const token = await firebaseIdToken();
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+token },
+    body: JSON.stringify(body||{}),
   });
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error || 'request-failed');
+  return data;
+}
+
+async function openAttachment(path){
+  const win = window.open('', '_blank');
+  try{
+    const { url } = await callAttachmentApi('/api/attachments/signed-url', {path});
+    if(win) win.location.href = url; else window.open(url, '_blank');
+  }catch(err){
+    console.error('Falha ao abrir anexo:', err);
+    if(win) win.close();
+    toast('Não foi possível abrir o arquivo.');
+  }
+}
+
+async function loadAttachmentThumbnails(scope){
+  const els = (scope||document).querySelectorAll('[data-thumb-path]');
+  for(const el of els){
+    const path = el.dataset.thumbPath;
+    if(!path || el.dataset.thumbLoaded) continue;
+    el.dataset.thumbLoaded = '1';
+    try{
+      const { url } = await callAttachmentApi('/api/attachments/signed-url', {path});
+      el.src = url;
+    }catch(err){ console.warn('miniatura do anexo falhou', err); }
+  }
 }
 
 async function handleFileUpload(e){
   const files = Array.from(e.target.files||[]);
   if(!files.length) return;
-
   const job = S.jobs.find(j=>j.id===jobModalState.jobId);
-  if(!job){
-    toast('Demanda não encontrada.');
-    e.target.value='';
-    return;
-  }
-
   toast('Enviando '+files.length+' arquivo(s)…');
-
   const newAtt = [];
-  const MAX_STORAGE_SIZE = 10*1024*1024; // 10 MB por arquivo no Firebase Storage
-  const MAX_LOCAL_SIZE = 700*1024;       // fallback no Firestore
-  const DOC_BUDGET = 900*1024;           // margem para o limite de ~1 MiB do documento
-  let embeddedBytes = (job.attachments||[]).reduce((sum,a)=> sum + (a.dataUrl ? a.dataUrl.length : 0), 0);
+  const MAX_SIZE = 10*1024*1024; // 10 MB por arquivo (Supabase Storage)
 
   for(const f of files){
-    let uploaded = false;
+    if(f.size > MAX_SIZE){ toast(f.name+' é maior que 10 MB e não pode ser anexado.'); continue; }
+    try{
+      const {path, signedUrl} = await callAttachmentApi('/api/attachments/upload-url', {
+        jobId: job.id, fileName: f.name, sizeBytes: f.size,
+      });
 
-    // Caminho principal: Firebase Storage
-    if(S.storage){
-      if(f.size > MAX_STORAGE_SIZE){
-        toast(f.name+' é maior que 10 MB e não pode ser anexado.');
-        continue;
-      }
+      const form = new FormData();
+      form.append('cacheControl', '3600');
+      form.append('', f);
 
-      try{
-        const id = uid();
-        const safeName = f.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const ref = S.storage.ref('anexos/'+job.id+'/'+id+'_'+safeName);
+      const putRes = await fetch(signedUrl, {method:'PUT', body: form});
+      if(!putRes.ok) throw new Error('upload-failed');
 
-        await ref.put(f, {contentType:f.type||'application/octet-stream'});
-        const url = await ref.getDownloadURL();
-
-        newAtt.push({
-          id,
-          name:f.name,
-          contentType:f.type||'application/octet-stream',
-          sizeBytes:f.size,
-          url,
-          storagePath:ref.fullPath
-        });
-        uploaded = true;
-      }catch(err){
-        console.error('Upload no Firebase Storage falhou:', err);
-        const denied = err && (
-          err.code==='storage/unauthorized' ||
-          err.code==='storage/unauthenticated' ||
-          /permission|unauthor/i.test(err.message||'')
-        );
-        if(denied){
-          toast('O Firebase Storage recusou o envio. Confira as regras do Storage.');
-        }
-      }
-    }
-
-    // Fallback: salva pequeno arquivo dentro do documento do Firestore.
-    // Serve apenas caso o Storage esteja indisponível.
-    if(!uploaded){
-      if(f.size > MAX_LOCAL_SIZE){
-        toast(f.name+' não foi enviado: o Storage falhou e o arquivo é maior que 700 KB.');
-        continue;
-      }
-
-      try{
-        const dataUrl = await fileToDataUrl(f);
-        if(embeddedBytes + dataUrl.length > DOC_BUDGET){
-          toast('Não foi possível anexar '+f.name+': esta demanda está perto do limite do Firestore.');
-          continue;
-        }
-
-        embeddedBytes += dataUrl.length;
-        newAtt.push({
-          id:uid(),
-          name:f.name,
-          contentType:f.type||'application/octet-stream',
-          sizeBytes:f.size,
-          dataUrl
-        });
-      }catch(err){
-        console.error('Anexo local falhou:', err);
-        toast('Falha ao anexar '+f.name+'.');
-      }
+      newAtt.push({id:uid(), name:f.name, contentType:f.type||'application/octet-stream', sizeBytes:f.size, path});
+    }catch(err){
+      console.error('Falha ao anexar arquivo:', err);
+      toast('Falha ao anexar '+f.name+'.');
     }
   }
 
   if(newAtt.length){
     const attachments = (job.attachments||[]).concat(newAtt);
-    const ok = await updateJob(
-      job.id,
-      {attachments},
-      {action:'anexou', description:'Anexou '+newAtt.length+' arquivo(s) em '+job.code+'.'}
-    );
-
-    if(ok){
-      // updateJob já sincroniza S.jobs, então renderModal mostra o anexo na hora.
-      toast(newAtt.length===1 ? 'Arquivo anexado com sucesso.' : newAtt.length+' arquivos anexados com sucesso.');
-    }
-  }else{
+    const ok = await updateJob(job.id, {attachments}, {action:'anexou', description:'Anexou '+newAtt.length+' arquivo(s) em '+job.code+'.'});
+    if(ok) toast(newAtt.length===1 ? 'Arquivo anexado com sucesso.' : newAtt.length+' arquivos anexados com sucesso.');
+  } else {
     toast('Nenhum arquivo foi anexado.');
   }
-
   e.target.value='';
   renderModal();
 }
@@ -2329,19 +2283,35 @@ async function handleFileUpload(e){
 async function removeAttachment(attachmentId){
   const job = S.jobs.find(j=>j.id===jobModalState.jobId);
   if(!job) return;
+
   const att = (job.attachments||[]).find(a=>a.id===attachmentId);
   if(!att) return;
+
   if(!confirm('Remover o arquivo "'+att.name+'"?')) return;
 
   const attachments = (job.attachments||[]).filter(a=>a.id!==attachmentId);
-  const ok = await updateJob(job.id, {attachments}, {action:'editou', description:'Removeu o anexo "'+att.name+'" de '+job.code+'.'});
-  if(ok){
-    toast('Anexo removido.');
-    if(att.storagePath && S.storage){
-      S.storage.ref(att.storagePath).delete().catch(err=>console.warn('falha ao remover arquivo do Storage', err));
-    }
-  }
+
+  const ok = await updateJob(
+    job.id,
+    {attachments},
+    {action:'editou', description:'Removeu o anexo "'+att.name+'" de '+job.code+'.'}
+  );
+
+  if(!ok) return;
+
+  // Atualiza apenas a cópia local para o modal refletir a remoção na hora.
+  // O listener do Firestore continuará sendo a fonte oficial dos dados.
+  job.attachments = attachments;
+  toast('Anexo removido.');
   renderModal();
+
+  // Remove o arquivo físico do Supabase depois de a demanda já ter sido
+  // atualizada, então uma falha aqui não desfaz a remoção da demanda.
+  if(att.path){
+    callAttachmentApi('/api/attachments/delete', {path: att.path}).catch(err=>{
+      console.warn('O anexo saiu da demanda, mas não foi possível apagar o arquivo no Supabase:', err);
+    });
+  }
 }
 
 /* ===================== ações: clientes ===================== */

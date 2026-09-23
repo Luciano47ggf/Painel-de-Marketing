@@ -1,0 +1,10 @@
+{
+  "name": "vinuta-painel-marketing",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Painel de Marketing Vinuta — frontend estatico (HTML/JS + Firebase compat) com funcoes serverless em /api para anexos no Supabase Storage.",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "jose": "^5.9.6"
+  }
+}
