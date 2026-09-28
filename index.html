@@ -560,10 +560,9 @@ function friendlyAuthError(code){
 }
 
 /* ===================== configuração do Firebase =====================
-   Preencha os campos abaixo com as chaves do SEU projeto Firebase
-   (gratuito). Veja o passo a passo enviado junto com este arquivo.
-   Enquanto ficar como está (com "COLE_AQUI"), o painel mostra uma tela
-   pedindo a configuração em vez de abrir o sistema. */
+   ATENÇÃO: este painel usa o projeto Firebase "painel-de-marketing-64559".
+   As regras do Firestore precisam ser publicadas NESSE MESMO projeto.
+   O Git/Vercel publica o site, mas não publica automaticamente firestore.rules. */
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyA46O-u6ormVql_kq4V_AE4Sv__zmu6PpU",
   authDomain: "painel-de-marketing-64559.firebaseapp.com",
@@ -1524,35 +1523,91 @@ function renderNpsResults(docs){
 }
 
 async function createNpsEvent(){
-  const name = document.getElementById('npse_name').value.trim();
-  const eventDate = document.getElementById('npse_date').value || '';
-  const closesRaw = document.getElementById('npse_closes').value;
+  const nameEl = document.getElementById('npse_name');
+  const dateEl = document.getElementById('npse_date');
+  const closesEl = document.getElementById('npse_closes');
+  const saveBtn = document.getElementById('saveNpsEvent');
+
+  const name = nameEl ? nameEl.value.trim() : '';
+  const eventDate = dateEl ? (dateEl.value || '') : '';
+  const closesRaw = closesEl ? closesEl.value : '';
+
   if(!name){ toast('Dê um nome para o evento.'); return; }
   if(!eventDate){ toast('Informe a data do evento.'); return; }
   if(!closesRaw){ toast('Informe até quando as avaliações ficam abertas.'); return; }
-  const closesDate = new Date(closesRaw);
-  if(isNaN(closesDate)){ toast('Data/hora limite inválida.'); return; }
 
-  const user = firebase.auth().currentUser;
-  if(!user){ toast('Sessão expirada. Faça login novamente.'); return; }
+  const closesDate = new Date(closesRaw);
+  if(isNaN(closesDate.getTime())){ toast('Data/hora limite inválida.'); return; }
+
+  const user = (S.auth && S.auth.currentUser) || firebase.auth().currentUser;
+  if(!user){
+    toast('Sessão expirada. Saia e entre novamente.');
+    return;
+  }
+
+  // Garante que o token de autenticação usado pelo Firestore esteja atualizado.
+  try{ await user.getIdToken(true); }
+  catch(e){ console.warn('Não foi possível atualizar o token do Firebase Auth.', e); }
+
+  // Confere o perfil antes de tentar gravar. Isso evita um permission-denied
+  // genérico quando o documento users/{uid} está ausente ou inativo.
+  let profile = null;
+  try{
+    const profileSnap = await usersCol().doc(user.uid).get();
+    if(!profileSnap.exists){
+      toast('Seu perfil não foi encontrado no Firestore. Saia e entre novamente.');
+      return;
+    }
+    profile = profileSnap.data() || {};
+    if(profile.status !== 'ativo'){
+      toast('Seu usuário está inativo. Procure um gestor.');
+      return;
+    }
+  }catch(e){
+    console.error('ERRO AO VALIDAR PERFIL PARA NPS:', e);
+    toast('Não foi possível validar seu perfil no Firebase.');
+    return;
+  }
 
   const data = {
-    name, eventDate,
+    name,
+    eventDate,
     closesAt: firebase.firestore.Timestamp.fromDate(closesDate),
     status: 'ativo',
     responseCount: 0,
     createdAt: new Date().toISOString(),
+    // Sempre usa o UID real da sessão do Firebase Auth.
     createdBy: user.uid,
   };
-  let ref;
-  try{ ref = await npsEventsCol().add(data); }
-  catch(e){
-    console.error('ERRO AO CRIAR NPS:', e);
-    console.error('UID AUTH:', user.uid);
-    console.error('DADOS ENVIADOS:', data);
-    toast('Não foi possível criar o evento.');
+
+  let ref = null;
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'Criando…'; }
+
+  try{
+    ref = await npsEventsCol().add(data);
+  }catch(e){
+    const code = e && e.code ? e.code : '';
+    const projectId = FIREBASE_CONFIG.projectId || '(sem projectId)';
+
+    console.group('Falha ao criar evento NPS');
+    console.error('Erro:', e);
+    console.log('Projeto Firebase:', projectId);
+    console.log('UID autenticado:', user.uid);
+    console.log('Perfil Firestore:', profile);
+    console.log('Dados enviados:', data);
+    console.groupEnd();
+
+    if(code === 'permission-denied' || /permission/i.test((e && e.message) || '')){
+      toast('Firebase bloqueou a criação. Confira as regras publicadas no projeto '+projectId+'.');
+    }else{
+      toast('Não foi possível criar o evento.');
+    }
     return;
+  }finally{
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = 'Criar evento'; }
   }
+
+  // O log é secundário: se ele falhar, o evento já foi criado e não deve ser perdido.
   await logActivity('criou','npsEvent', name, 'Criou o evento de NPS "'+name+'".');
   toast('Evento criado.');
   openNpsQrModal(ref.id);
