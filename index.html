@@ -1576,7 +1576,7 @@ let userModalState = null;    // userId
 let npsModalState = null;     // {type:'create'|'qr'|'results', eventId}
 
 function openJobModal(jobId){
-  jobModalState = {jobId: jobId||null, mode: jobId?'view':'create'};
+  jobModalState = {jobId: jobId||null, mode: jobId?'view':'create', editingCommentIndex: null};
   clientModalState = null; userModalState = null; npsModalState = null;
   renderModal();
 }
@@ -1776,11 +1776,31 @@ function viewJobModalHTML(job){
 
         <div class="section-label">Comentários</div>
         <div id="commentList">
-          ${(job.comments||[]).slice().reverse().map(c=>`
+          ${(job.comments||[]).map((c,i)=>({c,i})).reverse().map(({c,i})=>{
+            const canEdit = c.userId===S.me.id || isGestor;
+            if(jobModalState.editingCommentIndex===i){
+              return `
+              <div class="comment">
+                <div class="comment-meta"><b>${esc(profileName(c.userId) || 'Usuário')}</b><span>${fmtDateTime(c.ts)}</span></div>
+                <div class="field" style="margin-top:4px;">
+                  <textarea id="editCommentText" style="min-height:56px;">${esc(c.text)}</textarea>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:6px;">
+                  <button type="button" class="btn small primary" data-save-comment="${i}">Salvar</button>
+                  <button type="button" class="btn small ghost" data-cancel-comment="1">Cancelar</button>
+                </div>
+              </div>`;
+            }
+            return `
             <div class="comment">
-              <div class="comment-meta"><b>${esc(profileName(c.userId) || 'Usuário')}</b><span>${fmtDateTime(c.ts)}</span></div>
+              <div class="comment-meta">
+                <b>${esc(profileName(c.userId) || 'Usuário')}</b>
+                <span>${fmtDateTime(c.ts)}${c.editedAt?' · editado':''}</span>
+                ${canEdit?`<button type="button" class="btn small ghost" data-edit-comment="${i}" style="margin-left:auto;padding:2px 8px;">Editar</button>`:''}
+              </div>
               <div class="comment-text">${esc(c.text)}</div>
-            </div>`).join('') || '<span class="hint">Nenhum comentário ainda.</span>'}
+            </div>`;
+          }).join('') || '<span class="hint">Nenhum comentário ainda.</span>'}
         </div>
         <div class="field" style="margin-top:12px;">
           <textarea id="newComment" placeholder="Escrever um comentário…" style="min-height:56px;"></textarea>
@@ -2066,6 +2086,16 @@ function bindModalEvents(){
 
   const addC = document.getElementById('addComment');
   if(addC) addC.onclick = addCommentToJob;
+
+  ov.querySelectorAll('[data-edit-comment]').forEach(el=>{
+    el.onclick = ()=>{ jobModalState.editingCommentIndex = Number(el.dataset.editComment); renderModal(); };
+  });
+  ov.querySelectorAll('[data-cancel-comment]').forEach(el=>{
+    el.onclick = ()=>{ jobModalState.editingCommentIndex = null; renderModal(); };
+  });
+  ov.querySelectorAll('[data-save-comment]').forEach(el=>{
+    el.onclick = ()=>saveCommentEdit(Number(el.dataset.saveComment));
+  });
 }
 
 /* ===================== ações: demandas ===================== */
@@ -2188,6 +2218,23 @@ async function addCommentToJob(){
   const comments = (job.comments||[]).concat([{ts:new Date().toISOString(), userId:S.me.id, text}]);
   await updateJob(job.id, {comments}, {action:'comentou', description:'Comentou em '+job.code+'.'});
   ta.value='';
+  renderModal();
+}
+
+async function saveCommentEdit(index){
+  const job = S.jobs.find(j=>j.id===jobModalState.jobId);
+  if(!job) return;
+  const comment = (job.comments||[])[index];
+  if(!comment) return;
+  const isGestor = S.role==='gestor';
+  if(comment.userId!==S.me.id && !isGestor){ toast('Você só pode editar seus próprios comentários.'); return; }
+  const ta = document.getElementById('editCommentText');
+  const text = ta.value.trim();
+  if(!text) return;
+  const comments = job.comments.slice();
+  comments[index] = {...comment, text, editedAt:new Date().toISOString()};
+  await updateJob(job.id, {comments}, {action:'editou', description:'Editou um comentário em '+job.code+'.'});
+  jobModalState.editingCommentIndex = null;
   renderModal();
 }
 
