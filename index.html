@@ -1533,17 +1533,26 @@ async function createNpsEvent(){
   const closesDate = new Date(closesRaw);
   if(isNaN(closesDate)){ toast('Data/hora limite inválida.'); return; }
 
+  const user = firebase.auth().currentUser;
+  if(!user){ toast('Sessão expirada. Faça login novamente.'); return; }
+
   const data = {
     name, eventDate,
     closesAt: firebase.firestore.Timestamp.fromDate(closesDate),
     status: 'ativo',
     responseCount: 0,
     createdAt: new Date().toISOString(),
-    createdBy: S.me.id,
+    createdBy: user.uid,
   };
   let ref;
   try{ ref = await npsEventsCol().add(data); }
-  catch(e){ console.error(e); toast('Não foi possível criar o evento.'); return; }
+  catch(e){
+    console.error('ERRO AO CRIAR NPS:', e);
+    console.error('UID AUTH:', user.uid);
+    console.error('DADOS ENVIADOS:', data);
+    toast('Não foi possível criar o evento.');
+    return;
+  }
   await logActivity('criou','npsEvent', name, 'Criou o evento de NPS "'+name+'".');
   toast('Evento criado.');
   openNpsQrModal(ref.id);
