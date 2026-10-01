@@ -1329,6 +1329,7 @@ function npsEventCardHTML(ev){
         <button class="btn small" data-nps-qr="${ev.id}">Ver QR Code</button>
         <button class="btn small" data-nps-results="${ev.id}">Ver resultados</button>
         ${open && S.role==='gestor' ? `<button class="btn small danger" data-nps-close="${ev.id}">Encerrar agora</button>` : ''}
+        ${S.role==='gestor' ? `<button class="btn small danger" data-nps-delete="${ev.id}">Excluir</button>` : ''}
       </div>
     </div>
   `;
@@ -1622,6 +1623,17 @@ async function closeNpsEventNow(eventId){
   catch(e){ toast('Não foi possível encerrar o evento.'); return; }
   await logActivity('editou','npsEvent', ev.name, 'Encerrou manualmente o evento de NPS "'+ev.name+'".');
   toast('Evento encerrado.');
+}
+
+async function deleteNpsEvent(eventId){
+  if(S.role!=='gestor'){ toast('Apenas o gestor exclui eventos de NPS.'); return; }
+  const ev = S.npsEvents.find(e=>e.id===eventId);
+  if(!ev) return;
+  if(!confirm('Excluir o evento de NPS "'+ev.name+'"? Essa ação não pode ser desfeita e removerá as avaliações recebidas.')) return;
+  try{ await npsEventsCol().doc(eventId).delete(); }
+  catch(e){ toast('Não foi possível excluir o evento.'); return; }
+  await logActivity('excluiu','npsEvent', ev.name, 'Excluiu o evento de NPS "'+ev.name+'".');
+  toast('Evento excluído.');
 }
 
 function copyNpsLink(eventId){
@@ -2084,6 +2096,7 @@ function bindPageEvents(){
     document.querySelectorAll('[data-nps-qr]').forEach(el=>{ el.onclick = ()=>openNpsQrModal(el.dataset.npsQr); });
     document.querySelectorAll('[data-nps-results]').forEach(el=>{ el.onclick = ()=>openNpsResultsModal(el.dataset.npsResults); });
     document.querySelectorAll('[data-nps-close]').forEach(el=>{ el.onclick = ()=>closeNpsEventNow(el.dataset.npsClose); });
+    document.querySelectorAll('[data-nps-delete]').forEach(el=>{ el.onclick = ()=>deleteNpsEvent(el.dataset.npsDelete); });
   }
 }
 
