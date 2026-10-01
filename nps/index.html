@@ -992,6 +992,14 @@
     }
 
     const data = snap.data();
+
+    // Eventos antigos nao tem o campo 'brand' -> tratados como Vinuta (comportamento inalterado).
+    const brand = data.brand || 'vinuta';
+    if (brand === 'saciatta') {
+      window.location.replace('saciatta.html' + window.location.search);
+      return;
+    }
+
     const closesAt = (data.closesAt && typeof data.closesAt.toDate === 'function') ? data.closesAt.toDate() : null;
     const isOpen = data.status === 'ativo' && (!closesAt || new Date() < closesAt);
 

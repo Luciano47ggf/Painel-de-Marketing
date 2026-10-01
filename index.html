@@ -1310,10 +1310,12 @@ function npsHTML(){
 function npsEventCardHTML(ev){
   const open = npsIsOpen(ev);
   const closesDate = npsClosesAtDate(ev);
+  const brand = BRANDS[ev.brand] || BRANDS.vinuta;
   return `
     <div class="nps-event-card">
       <div class="nps-event-top">
         <div>
+          <div class="brand-chip" style="margin-bottom:6px;"><span class="seal"><img src="${brand.seal}" alt="${esc(brand.name)}"></span><span class="brand-name">${esc(brand.name)}</span></div>
           <div class="nps-event-name">${esc(ev.name)}</div>
           <div class="nps-event-meta">Evento em ${ev.eventDate?fmtDate(ev.eventDate):'—'}</div>
           <div class="nps-event-meta">${open ? 'Recebendo avaliações · link disponível até '+fmtNpsClosesLabel(closesDate) : 'Avaliação encerrada'}</div>
@@ -1344,6 +1346,16 @@ function npsEventFormHTML(){
         <button class="modal-close" id="closeModal">×</button>
       </div>
       <div class="modal-body">
+        <div class="field">
+          <label>Marca do NPS</label>
+          ${BRAND_LIST.map((b)=>`
+            <label class="brand-option" data-brand-option="${b.id}">
+              <input type="radio" name="npse_brand" value="${b.id}">
+              <span class="seal"><img src="${b.seal}" alt="${esc(b.name)}"></span>
+              <span><b>${esc(b.name)}</b>${b.tagline?` <span class="hint">— ${esc(b.tagline)}</span>`:''}</span>
+            </label>
+          `).join('')}
+        </div>
         <div class="field"><label>Nome do evento</label><input type="text" id="npse_name" placeholder="Ex.: Degustação Expo 2026"></div>
         <div class="field"><label>Data do evento</label><input type="date" id="npse_date"></div>
         <div class="field"><label>Data/hora limite para receber avaliações</label><input type="datetime-local" id="npse_closes"></div>
@@ -1532,7 +1544,10 @@ async function createNpsEvent(){
   const name = nameEl ? nameEl.value.trim() : '';
   const eventDate = dateEl ? (dateEl.value || '') : '';
   const closesRaw = closesEl ? closesEl.value : '';
+  const brandEl = document.querySelector('input[name="npse_brand"]:checked');
+  const brand = brandEl ? brandEl.value : '';
 
+  if(!brand){ toast('Escolha a marca do evento (Vinuta ou Saciatta).'); return; }
   if(!name){ toast('Dê um nome para o evento.'); return; }
   if(!eventDate){ toast('Informe a data do evento.'); return; }
   if(!closesRaw){ toast('Informe até quando as avaliações ficam abertas.'); return; }
@@ -1579,6 +1594,7 @@ async function createNpsEvent(){
     createdAt: new Date().toISOString(),
     // Sempre usa o UID real da sessão do Firebase Auth.
     createdBy: user.uid,
+    brand,
   };
 
   let ref = null;
@@ -1609,7 +1625,8 @@ async function createNpsEvent(){
   }
 
   // O log é secundário: se ele falhar, o evento já foi criado e não deve ser perdido.
-  await logActivity('criou','npsEvent', name, 'Criou o evento de NPS "'+name+'".');
+  const brandName = BRANDS[brand] ? BRANDS[brand].name : brand;
+  await logActivity('criou','npsEvent', name, 'Criou o evento de NPS "'+name+'" ('+brandName+').');
   toast('Evento criado.');
   openNpsQrModal(ref.id);
 }

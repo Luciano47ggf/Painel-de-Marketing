@@ -105,7 +105,11 @@ service cloud.firestore {
       allow list: if isActive();
       allow create: if isActive()
         && request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.status == 'ativo';
+        && request.resource.data.status == 'ativo'
+        // 'brand' identifica qual formulario publico (Vinuta ou Saciatta)
+        // deve ser exibido. Opcional por retrocompatibilidade: eventos sem
+        // o campo continuam sendo tratados como Vinuta no formulario publico.
+        && (!('brand' in request.resource.data) || request.resource.data.brand in ['vinuta', 'saciatta']);
       allow delete: if isGestor();
       allow update: if isGestor()
         || (
